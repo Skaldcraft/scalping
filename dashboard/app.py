@@ -61,8 +61,25 @@ st.markdown(
       }
       .pulse-brand p {
         margin: 0.25rem 0 0 0;
-        color: rgba(49, 51, 63, 0.72);
+        color: inherit;
+        opacity: 0.78;
         font-size: 0.92rem;
+      }
+      .theme-note {
+        color: inherit;
+        opacity: 0.88;
+        font-size: 0.95rem;
+      }
+      .theme-note--small {
+        font-size: 0.9rem;
+        opacity: 0.8;
+      }
+      .soft-panel {
+        padding: 0.9rem 1rem;
+        border-radius: 14px;
+        border: 1px solid rgba(127, 127, 127, 0.18);
+        background: rgba(127, 127, 127, 0.08);
+        color: inherit;
       }
       [data-testid="stAppSkipLink"],
       a[href="#main-content"],
@@ -101,16 +118,18 @@ st.markdown(
         height: 2.35rem;
         padding: 0.15rem 0.95rem;
         border-radius: 999px;
-        border: 1px solid rgba(241, 224, 183, 0.18);
-        background: rgba(255, 255, 255, 0.03);
-        color: #b7bcc5 !important;
+        border: 1px solid rgba(127, 127, 127, 0.18);
+        background: rgba(127, 127, 127, 0.05);
+        color: inherit !important;
+        opacity: 0.82;
         font-size: 1.08rem !important;
         font-weight: 600 !important;
-        filter: grayscale(100%);
+        filter: grayscale(35%);
       }
       button[data-baseweb="tab"][aria-selected="true"] {
         background: linear-gradient(90deg, rgba(74, 144, 226, 0.20), rgba(0, 200, 150, 0.16));
-        color: #d7dbe2 !important;
+        color: inherit !important;
+        opacity: 1;
       }
     </style>
     """,
@@ -171,7 +190,7 @@ def enable_dashboard_auto_refresh(interval_minutes: int = 15):
 # ---------------------------------------------------------------------------
 
 def build_sidebar(default_cfg: dict) -> tuple[dict, date, date]:
-    st.sidebar.title("Backtest Parameters")
+    st.sidebar.title("Backtest Controls")
 
     st.sidebar.subheader("Date Range")
     start_date = st.sidebar.date_input(
@@ -806,13 +825,13 @@ def render_home():
     st.caption("Changes here will appear in the sidebar the next time you open Backtest.")
     live_symbols = preview_equities(load_default_config())
     st.markdown(
-        f"<div style='color: rgba(241,224,183,0.95); font-size: 0.95rem;'>"
+        f"<div class='theme-note'>"
         f"Live symbol preview: {', '.join(live_symbols) if live_symbols else 'No symbols selected yet.'}"
         f"</div>",
         unsafe_allow_html=True,
     )
     st.markdown(
-        "<div style='color: rgba(241,224,183,0.85); font-size: 0.9rem;'>"
+        "<div class='theme-note theme-note--small'>"
         "Weekly results are directional and informational. They are not final conclusions, but a way to monitor how the strategy is behaving over time."
         "</div>",
         unsafe_allow_html=True,
@@ -1221,20 +1240,18 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
 # ---------------------------------------------------------------------------
 
 def main():
-    st.sidebar.markdown("### Live Monitor")
-    auto_refresh_enabled = st.sidebar.checkbox(
-        "Auto-refresh dashboard",
-        value=True,
-        help="Reload the page automatically to show the newest scheduled-run results.",
+    st.sidebar.markdown("### Automation")
+    st.sidebar.caption(
+        "Background updates run every 15 minutes during 09:30–11:30 ET through the scheduled task."
     )
-    refresh_interval = st.sidebar.selectbox(
-        "Refresh interval",
-        options=[5, 15, 30],
-        index=1,
-        format_func=lambda x: f"Every {x} minutes",
+    auto_refresh_enabled = st.sidebar.checkbox(
+        "Auto-refresh page",
+        value=True,
+        help="Reload the interface every 15 minutes so the latest background run appears automatically.",
     )
     if auto_refresh_enabled:
-        enable_dashboard_auto_refresh(refresh_interval)
+        enable_dashboard_auto_refresh(15)
+    st.sidebar.caption("Use `Run Backtest` below if you want an immediate update right now.")
 
     pulse_tab, backtest_tab, guide_tab = st.tabs(
         ["🏠 PulseTrader", "📊 Backtest", "📘 How it works"]
@@ -1254,6 +1271,7 @@ def main():
         default_cfg = load_default_config()
         cfg, start_date, end_date = build_sidebar(default_cfg)
 
+        st.sidebar.markdown("### Manual Update")
         run_button = st.sidebar.button("Run Backtest", type="primary", width="stretch")
 
         if run_button:
@@ -1316,12 +1334,14 @@ def main():
 
         last_run = st.session_state.get("last_run")
         if not last_run:
-            st.info(
-                "Configure your parameters in the sidebar and press **Run Backtest** to begin. "
-                "\n\n"
-                "**Data sources:**  Equities are fetched automatically from Yahoo Finance.  "
-                "For Forex instruments, drop OHLCV CSV files into the `data_files/` folder "
-                "and add them to `config/settings.yaml`."
+            st.markdown(
+                """
+                <div class="soft-panel">
+                    <strong>Start here.</strong> Configure your parameters in the sidebar and press <strong>Run Backtest</strong> to begin.<br><br>
+                    <strong>Data sources:</strong> Equities are fetched automatically from Yahoo Finance. For Forex instruments, place OHLCV CSV files in <code>data_files/</code> and add them to <code>config/settings.yaml</code>.
+                </div>
+                """,
+                unsafe_allow_html=True,
             )
         else:
             render_results(
