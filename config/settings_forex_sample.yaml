@@ -1,0 +1,35 @@
+# config/settings_forex_sample.yaml
+# =================================
+# Minimal Forex test configuration for the Precision Scalping Utility.
+
+version: "1.0"
+
+account:
+  starting_capital: 10000
+  risk_per_trade_pct: 1.0
+  daily_loss_limit_pct: 5.0
+
+session:
+  start_time: "09:30"
+  end_time: "11:00"
+  timezone: "America/New_York"
+
+opening_range:
+  candle_size_minutes: 15
+
+strategy:
+  atr_period: 14
+  manipulation_threshold_pct: 25.0
+  reward_ratios: [2, 3]
+
+risk:
+  profit_factor_floor: 1.5
+  min_trades_before_pf_check: 10
+
+instruments:
+  equities: []
+  forex_csv_files:
+    EURUSD: "data_files/EURUSD_5min_full_day_sample.csv"
+
+commissions:
+  per_trade_flat: 0.50

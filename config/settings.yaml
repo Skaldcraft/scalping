@@ -1,0 +1,50 @@
+# config/settings.yaml
+# =====================
+# Precision Scalping Utility — Configuration File
+#
+# All parameters are editable here without touching any code.
+# The version field is stamped into every results folder for traceability.
+# Update the version string whenever you change the strategy logic or
+# parameters so that result sets remain comparable.
+
+version: "1.0"
+
+account:
+  starting_capital:     10000      # USD
+  risk_per_trade_pct:   1.0        # % of current equity risked per trade
+  daily_loss_limit_pct: 5.0        # halt trading if daily loss exceeds this %
+
+session:
+  start_time: "09:30"              # New York market open
+  end_time:   "11:00"              # Hard gate for new entries (90 min window)
+  timezone:   "America/New_York"
+
+opening_range:
+  candle_size_minutes: 15          # 5 or 15 — user-selectable
+
+strategy:
+  atr_period:                14    # Lookback period for ATR calculation
+  manipulation_threshold_pct: 25.0 # OR range >= this % of ATR → manipulation mode
+  reward_ratios: [2, 3]            # Both targets tracked and compared
+
+risk:
+  profit_factor_floor:          1.5  # Halt if PF drops below this
+  min_trades_before_pf_check:   10   # Minimum trades before PF circuit breaker activates
+
+instruments:
+  equities:
+    - AAPL
+    - NVDA
+    - AMZN
+    - QQQ
+    - SPY
+  # Forex: place your OHLCV CSV files in data_files/ and add entries below.
+  # Expected CSV columns (case-insensitive): timestamp, open, high, low, close, volume
+  # Timestamps should be in ISO 8601 format, America/New_York timezone preferred.
+  forex_csv_files: {}
+  # Example:
+  #   EURUSD: "data_files/EURUSD_5min.csv"
+  #   GBPUSD: "data_files/GBPUSD_5min.csv"
+
+commissions:
+  per_trade_flat: 0.50             # Flat $ commission deducted per trade (both entry and exit combined)
