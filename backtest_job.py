@@ -33,14 +33,20 @@ def load_config(config_path: str | Path) -> dict:
         return yaml.safe_load(f)
 
 
-def run_backtest_job(cfg: dict, start_date: date, end_date: date, config_path: str | Path) -> dict:
+def run_backtest_job(
+    cfg: dict,
+    start_date: date,
+    end_date: date,
+    config_path: str | Path,
+    results_dir: str | Path = "results",
+) -> dict:
     bt = Backtester(cfg)
     result = bt.run(start_date, end_date)
 
     all_trades = [t for trades in result.instrument_results.values() for t in trades]
 
     version = cfg.get("version", "1.0")
-    recorder = JournalRecorder(results_dir="results", version=version, config=cfg)
+    recorder = JournalRecorder(results_dir=str(results_dir), version=version, config=cfg)
 
     trade_log_path = recorder.save_trade_log(result.instrument_results)
     session_log_path = recorder.save_session_log(result.session_summaries)

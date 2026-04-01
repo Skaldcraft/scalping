@@ -31,6 +31,20 @@ risk:
   profit_factor_floor:          1.5  # Halt if PF drops below this
   min_trades_before_pf_check:   10   # Minimum trades before PF circuit breaker activates
 
+weekly_review:
+  enabled: true
+  min_trades_for_setup_review: 10
+  good_win_rate_pct: 60.0
+  mixed_win_rate_pct: 45.0
+  good_profit_factor: 1.5
+  mixed_profit_factor: 1.0
+  good_drawdown_pct: 3.0
+  mixed_drawdown_pct: 5.0
+
+long_view:
+  enabled: true
+  recent_weeks_to_show: 8
+
 instruments:
   equities:
     - AAPL

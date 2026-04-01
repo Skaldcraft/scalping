@@ -177,6 +177,42 @@ If you need to target a specific date:
 python daily_run.py --date 2026-03-20 --config config/settings_equities_multi_sample.yaml
 ```
 
+### Weekly Batch Report
+
+Run a full weekly batch over a date range:
+
+```bash
+python weekly_batch.py --start 2026-01-05 --end 2026-03-27 --config config/settings.yaml
+```
+
+What it creates:
+- `results/batch_2026-01-05_to_2026-03-27/weekly_summary.csv`
+- `results/batch_2026-01-05_to_2026-03-27/weekly_report.txt`
+- `results/batch_2026-01-05_to_2026-03-27/weekly_report.json`
+- `results/batch_2026-01-05_to_2026-03-27/weeks/` with one folder per week
+
+### Daily Workflow
+
+1. Edit locally in your code editor.
+   - Change strategy, UI, docs, or config files in this workspace.
+2. Run a quick local test.
+   - CLI: `python main.py --start YYYY-MM-DD --end YYYY-MM-DD --config <config-file>`
+   - Daily runner: `python daily_run.py`
+3. Check the dashboard locally.
+   - Run: `python -m streamlit run dashboard/app.py`
+   - Review the charts, trade table, and run report.
+4. Update versioning if strategy logic changed.
+   - Increment `version` in `config/settings.yaml`.
+   - Add a note to `config/changelog.md`.
+5. Commit the change locally.
+   - From this project folder: `git add .` then `git commit -m "<message>"`
+6. Push to GitHub.
+   - From this project folder: `git push`
+   - This updates `https://github.com/Skaldcraft/scalping.git`.
+7. Refresh the app if needed.
+   - For local use: stop and restart Streamlit or rerun the CLI.
+   - For hosted deployments: let the deployment pipeline pull the new commit.
+
 ---
 
 ## Adding Forex Data
