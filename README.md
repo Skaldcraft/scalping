@@ -77,7 +77,7 @@ pip install -r requirements.txt
 ## Running the Dashboard (recommended)
 
 ```bash
-streamlit run dashboard/app.py
+python -m streamlit run dashboard/app.py
 ```
 
 Then open `http://localhost:8501` in your browser.
@@ -175,6 +175,33 @@ If you need to target a specific date:
 
 ```bash
 python daily_run.py --date 2026-03-20 --config config/settings_equities_multi_sample.yaml
+```
+
+### Intraday 15-Minute Automation (Windows)
+
+If you want the utility to rerun automatically during market hours, use the included PowerShell helpers:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File register_intraday_task.ps1
+```
+
+What this does:
+- creates a Windows scheduled task named `PulseTrader Intraday 15m`
+- triggers every `15` minutes
+- only performs the real run during `09:30` to `11:30` **New York time**
+- uses `run_intraday.ps1`, which calls `daily_run.py` for the current ET date
+
+Useful commands:
+
+```powershell
+# Test the intraday runner immediately
+powershell.exe -ExecutionPolicy Bypass -File run_intraday.ps1 -ForceRun
+
+# Inspect the scheduled task
+schtasks.exe /Query /TN "PulseTrader Intraday 15m" /V /FO LIST
+
+# Remove the scheduled task if needed
+schtasks.exe /Delete /TN "PulseTrader Intraday 15m" /F
 ```
 
 ### Weekly Batch Report
@@ -352,7 +379,7 @@ This tests roughly 65 sessions on the default instrument list and should
 complete in under two minutes. Then open the dashboard to explore the results:
 
 ```bash
-streamlit run dashboard/app.py
+python -m streamlit run dashboard/app.py
 ```
 
 ---

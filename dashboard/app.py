@@ -4,7 +4,7 @@ dashboard/app.py
 Streamlit web dashboard for the Precision Scalping Utility backtester.
 
 Run with:
-    streamlit run dashboard/app.py
+    python -m streamlit run dashboard/app.py
 
 The dashboard provides:
   - Sidebar controls for all backtest parameters
@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 import yaml
 
 from data.models import TradeResult
@@ -63,20 +64,53 @@ st.markdown(
         color: rgba(49, 51, 63, 0.72);
         font-size: 0.92rem;
       }
-      a, a:visited {
-        color: #f1e0b7 !important;
-        text-decoration: none !important;
+      [data-testid="stAppSkipLink"],
+      a[href="#main-content"],
+      a[href="#main"] {
+        display: none !important;
       }
-      a:hover {
-        color: #fbf0d9 !important;
-        text-decoration: underline !important;
+      h1 a, h2 a, h3 a, h4 a, h5 a, h6 a {
+        display: none !important;
       }
-      a[target="_blank"]::after,
-      a[rel*="noopener"]::after {
-        content: none !important;
+      @keyframes pulseCoinSpin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+      }
+      [data-testid="stStatusWidget"] {
+        position: relative;
+      }
+      [data-testid="stStatusWidget"] > * {
+        opacity: 0 !important;
+      }
+      [data-testid="stStatusWidget"]::after {
+        content: "🪙";
+        display: inline-block;
+        font-size: 1rem;
+        filter: grayscale(100%);
+        opacity: 0.78;
+        animation: pulseCoinSpin 1.2s linear infinite;
       }
       div[data-testid="stButton"] > button[kind="secondary"] {
         border-radius: 999px;
+      }
+      div[data-baseweb="tab-list"] {
+        gap: 0.45rem;
+        margin-bottom: 0.35rem;
+      }
+      button[data-baseweb="tab"] {
+        height: 2.35rem;
+        padding: 0.15rem 0.95rem;
+        border-radius: 999px;
+        border: 1px solid rgba(241, 224, 183, 0.18);
+        background: rgba(255, 255, 255, 0.03);
+        color: #b7bcc5 !important;
+        font-size: 1.08rem !important;
+        font-weight: 600 !important;
+        filter: grayscale(100%);
+      }
+      button[data-baseweb="tab"][aria-selected="true"] {
+        background: linear-gradient(90deg, rgba(74, 144, 226, 0.20), rgba(0, 200, 150, 0.16));
+        color: #d7dbe2 !important;
       }
     </style>
     """,
@@ -99,18 +133,45 @@ st.set_page_config(
 # ---------------------------------------------------------------------------
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "settings.yaml"
+GUIDE_PATH = Path(__file__).resolve().parent.parent / "BEGINNER_GUIDE.md"
 
 @st.cache_resource
 def load_default_config():
     with open(CONFIG_PATH, "r") as f:
         return yaml.safe_load(f)
 
+@st.cache_data
+def load_beginner_guide() -> str:
+    if GUIDE_PATH.exists():
+        return GUIDE_PATH.read_text(encoding="utf-8")
+    return (
+        "# How it works\n\n"
+        "The beginner guide is not available yet, but the Backtest tab is ready to use."
+    )
+
+
+def enable_dashboard_auto_refresh(interval_minutes: int = 15):
+    interval_ms = max(1, interval_minutes) * 60 * 1000
+    st.sidebar.caption(
+        f"Auto-refresh is active. The dashboard will reload every {interval_minutes} minutes to pick up new scheduled results."
+    )
+    components.html(
+        f"""
+        <script>
+            window.setTimeout(function() {{
+                window.parent.location.reload();
+            }}, {interval_ms});
+        </script>
+        """,
+        height=0,
+    )
+
 # ---------------------------------------------------------------------------
 # Sidebar — parameter controls
 # ---------------------------------------------------------------------------
 
 def build_sidebar(default_cfg: dict) -> tuple[dict, date, date]:
-    st.sidebar.title("⚙️ Backtest Parameters")
+    st.sidebar.title("Backtest Parameters")
 
     st.sidebar.subheader("Date Range")
     start_date = st.sidebar.date_input(
@@ -670,7 +731,7 @@ def render_weekly_equity_overview(symbols: list[str], results_dir: Path):
 
     st.subheader("Weekly Equity Overview")
     if overall:
-        st.plotly_chart(_sparkline_figure(overall, "Portfolio Weekly Net P&L"), use_container_width=True)
+        st.plotly_chart(_sparkline_figure(overall, "Portfolio Weekly Net P&L"), width="stretch")
     else:
         st.info("No weekly data yet for the portfolio overview.")
 
@@ -685,7 +746,7 @@ def render_weekly_equity_overview(symbols: list[str], results_dir: Path):
             points = by_symbol.get(symbol, [])
             st.markdown(f"**{symbol}**")
             if points:
-                st.plotly_chart(_sparkline_figure(points, f"{symbol} Weekly Net P&L"), use_container_width=True)
+                st.plotly_chart(_sparkline_figure(points, f"{symbol} Weekly Net P&L"), width="stretch")
                 latest = points[-1]
                 st.caption(
                     f"Latest week {latest['week']}: ${latest['net_pnl']:,.2f} | "
@@ -695,16 +756,38 @@ def render_weekly_equity_overview(symbols: list[str], results_dir: Path):
                 st.info("No data yet")
 
 
-def render_top_nav(active_view: str):
-    left, right = st.columns([1.5, 2])
-    with left:
-        if st.button("PulseTrader", key="nav_home", use_container_width=True):
-            st.session_state["view"] = "home"
-            st.rerun()
-    with right:
-        if st.button("Backtest", key="nav_backtest", use_container_width=True):
-            st.session_state["view"] = "backtest"
-            st.rerun()
+def render_how_it_works():
+    st.title("How it works")
+    st.caption(
+        "A beginner-friendly guide to scalping, backtesting, and using PulseTrader with confidence."
+    )
+
+    st.markdown(
+        """
+        <div style="padding: 1rem 1.1rem; border-radius: 16px; border: 1px solid rgba(241,224,183,0.18); background: linear-gradient(135deg, rgba(74,144,226,0.16), rgba(0,200,150,0.10)); margin-bottom: 0.85rem;">
+            <h3 style="margin:0 0 0.35rem 0;">Start here</h3>
+            <p style="margin:0;">
+                PulseTrader helps you study how a rule-based scalping idea would have behaved on past market data.
+                It is designed for learning, review, and disciplined testing — not for automatic live order placement.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.markdown("### What it studies")
+        st.write("Opening-range setups near the New York market open.")
+    with c2:
+        st.markdown("### What it does")
+        st.write("Runs backtests, compares outcomes, and saves clear result files.")
+    with c3:
+        st.markdown("### What it is not")
+        st.write("It is not a broker connection and does not place live trades for you.")
+
+    st.divider()
+    st.markdown(load_beginner_guide())
 
 
 def render_home():
@@ -765,7 +848,7 @@ def render_home():
 
     with history_tab:
         if weekly_rows:
-            st.dataframe(pd.DataFrame(weekly_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(weekly_rows), width="stretch", hide_index=True)
         else:
             st.info("No weekly history found yet.")
 
@@ -781,7 +864,7 @@ def render_home():
             b2.metric("Avg Win Rate", f"{batch_summary.get('avg_win_rate_2r', 'N/A')}%" if batch_summary.get("avg_win_rate_2r") is not None else "N/A")
             b3.metric("Total P&L", f"${batch_summary.get('total_net_pnl_2r', 0):,.2f}" if batch_summary else "N/A")
             if not summary_df.empty:
-                st.dataframe(summary_df, use_container_width=True, hide_index=True)
+                st.dataframe(summary_df, width="stretch", hide_index=True)
 
             best_week = latest_batch.get("best_week")
             weakest_week = latest_batch.get("weakest_week")
@@ -797,7 +880,7 @@ def render_home():
             st.info("No weekly batch report found yet.")
 
     st.divider()
-    st.write("Use the PulseTrader button above to return to home and the Backtest button to run a new test.")
+    st.write("Use the tabs above to move between `PulseTrader`, `Backtest`, and `How it works`.")
 
 
 def build_long_view(results_dir: Path, limit: int = 5) -> dict:
@@ -931,7 +1014,7 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
     metrics_3r = comparison["3r"]
 
     if result.validation_warnings:
-        with st.expander("⚠️ Data Validation Warnings"):
+        with st.expander("Data Validation Warnings"):
             for w in result.validation_warnings:
                 st.warning(w)
 
@@ -945,12 +1028,12 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
 
     st.plotly_chart(
         equity_curve_chart(metrics_2r, metrics_3r, cfg["account"]["starting_capital"]),
-        use_container_width=True,
+        width="stretch",
     )
 
     mode_fig = mode_bar_chart(metrics_2r)
     if mode_fig:
-        st.plotly_chart(mode_fig, use_container_width=True)
+        st.plotly_chart(mode_fig, width="stretch")
 
     st.subheader("2R vs 3R Comparison")
     compare_data = {
@@ -1073,7 +1156,7 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
             for line in long_lines:
                 st.write(line)
 
-            st.dataframe(pd.DataFrame(recent_weeks), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(recent_weeks), width="stretch", hide_index=True)
         else:
             st.info("No saved weekly history found yet for the long-view summary.")
     else:
@@ -1098,14 +1181,14 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
         if sel_inst != "All":
             filtered = filtered[filtered["Instrument"] == sel_inst]
 
-        st.dataframe(filtered, use_container_width=True, height=400)
+        st.dataframe(filtered, width="stretch", height=400)
 
     st.subheader("Download Results")
     dl1, dl2, dl3 = st.columns(3)
     trade_log_path = recorder.directory / "trade_log.csv"
     if trade_log_path.exists():
         dl1.download_button(
-            "📥 Trade Log (CSV)",
+            "Trade Log (CSV)",
             data=trade_log_path.read_bytes(),
             file_name="trade_log.csv",
             mime="text/csv",
@@ -1114,7 +1197,7 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
 
     if report_path.exists():
         dl2.download_button(
-            "📄 Run Report (TXT)",
+            "Run Report (TXT)",
             data=report_path.read_bytes(),
             file_name="run_report.txt",
             mime="text/plain",
@@ -1123,7 +1206,7 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
 
     if exec_log_path.exists():
         dl3.download_button(
-            "🔍 Execution Log (JSON)",
+            "Execution Log (JSON)",
             data=exec_log_path.read_bytes(),
             file_name="execution_log.json",
             mime="application/json",
@@ -1138,100 +1221,119 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
 # ---------------------------------------------------------------------------
 
 def main():
-    st.session_state.setdefault("view", "home")
-    render_top_nav(st.session_state["view"])
-
-    if st.session_state["view"] == "home":
-        render_home()
-        return
-
-    st.title("PulseTrader Backtester")
-    st.caption(
-        "A mechanical opening-range breakout strategy with ATR manipulation "
-        "filter, slingshot retest confirmation, and automated risk management."
+    st.sidebar.markdown("### Live Monitor")
+    auto_refresh_enabled = st.sidebar.checkbox(
+        "Auto-refresh dashboard",
+        value=True,
+        help="Reload the page automatically to show the newest scheduled-run results.",
     )
-    st.caption("Weekly results are monitoring signals, not final conclusions.")
+    refresh_interval = st.sidebar.selectbox(
+        "Refresh interval",
+        options=[5, 15, 30],
+        index=1,
+        format_func=lambda x: f"Every {x} minutes",
+    )
+    if auto_refresh_enabled:
+        enable_dashboard_auto_refresh(refresh_interval)
 
-    default_cfg = load_default_config()
-    cfg, start_date, end_date = build_sidebar(default_cfg)
+    pulse_tab, backtest_tab, guide_tab = st.tabs(
+        ["🏠 PulseTrader", "📊 Backtest", "📘 How it works"]
+    )
 
-    run_button = st.sidebar.button("▶  Run Backtest", type="primary", use_container_width=True)
+    with pulse_tab:
+        render_home()
 
-    if run_button:
-        if not cfg["instruments"]["equities"] and not cfg["instruments"].get("forex_csv_files"):
-            st.error("Please select at least one instrument before running.")
-            return
+    with backtest_tab:
+        st.title("PulseTrader Backtester")
+        st.caption(
+            "A mechanical opening-range breakout strategy with ATR manipulation "
+            "filter, slingshot retest confirmation, and automated risk management."
+        )
+        st.caption("Weekly results are monitoring signals, not final conclusions.")
 
-        if start_date >= end_date:
-            st.error("Start date must be before end date.")
-            return
+        default_cfg = load_default_config()
+        cfg, start_date, end_date = build_sidebar(default_cfg)
 
-        with st.spinner("Running backtest…"):
-            try:
-                bt = Backtester(cfg)
-                result = bt.run(start_date, end_date)
-            except Exception as exc:
-                st.error(f"Backtest failed: {exc}")
-                st.exception(exc)
+        run_button = st.sidebar.button("Run Backtest", type="primary", width="stretch")
+
+        if run_button:
+            if not cfg["instruments"]["equities"] and not cfg["instruments"].get("forex_csv_files"):
+                st.error("Please select at least one instrument before running.")
                 return
 
-        version = default_cfg.get("version", "1.0")
-        recorder = JournalRecorder(results_dir="results", version=version, config=cfg)
-        recorder.save_trade_log(result.instrument_results)
-        recorder.save_session_log(result.session_summaries)
-        recorder.save_config_snapshot()
+            if start_date >= end_date:
+                st.error("Start date must be before end date.")
+                return
 
-        halt_events = []
-        all_trades = [t for trades in result.instrument_results.values() for t in trades]
-        comparison = compare_targets(all_trades, cfg["account"]["starting_capital"])
-        report_path = generate_run_report(
-            instrument_results=result.instrument_results,
-            session_summaries=result.session_summaries,
-            metrics_2r=comparison["2r"],
-            metrics_3r=comparison["3r"],
-            circuit_halt_events=halt_events,
-            config=cfg,
-            start_date=str(start_date),
-            end_date=str(end_date),
-            version=version,
-            run_dir=recorder.directory,
-        )
+            with st.spinner("Loading market data and updating the view..."):
+                try:
+                    bt = Backtester(cfg)
+                    result = bt.run(start_date, end_date)
+                except Exception as exc:
+                    st.error(f"Backtest failed: {exc}")
+                    st.exception(exc)
+                    return
 
-        exec_log_path = generate_execution_log(
-            session_summaries=result.session_summaries,
-            instrument_results=result.instrument_results,
-            run_dir=recorder.directory,
-            version=version,
-            config=cfg,
-            start_date=str(start_date),
-            end_date=str(end_date),
-        )
+            version = default_cfg.get("version", "1.0")
+            recorder = JournalRecorder(results_dir="results", version=version, config=cfg)
+            recorder.save_trade_log(result.instrument_results)
+            recorder.save_session_log(result.session_summaries)
+            recorder.save_config_snapshot()
 
-        st.session_state["last_run"] = {
-            "cfg": cfg,
-            "result": result,
-            "recorder": recorder,
-            "report_path": report_path,
-            "exec_log_path": exec_log_path,
-        }
+            halt_events = []
+            all_trades = [t for trades in result.instrument_results.values() for t in trades]
+            comparison = compare_targets(all_trades, cfg["account"]["starting_capital"])
+            report_path = generate_run_report(
+                instrument_results=result.instrument_results,
+                session_summaries=result.session_summaries,
+                metrics_2r=comparison["2r"],
+                metrics_3r=comparison["3r"],
+                circuit_halt_events=halt_events,
+                config=cfg,
+                start_date=str(start_date),
+                end_date=str(end_date),
+                version=version,
+                run_dir=recorder.directory,
+            )
 
-    last_run = st.session_state.get("last_run")
-    if not last_run:
-        st.info(
-            "Configure your parameters in the sidebar and press **Run Backtest** to begin. "
-            "\n\n"
-            "**Data sources:**  Equities are fetched automatically from Yahoo Finance.  "
-            "For Forex instruments, drop OHLCV CSV files into the `data_files/` folder "
-            "and add them to `config/settings.yaml`."
-        )
-        return
-    render_results(
-        last_run["cfg"],
-        last_run["result"],
-        last_run["recorder"],
-        last_run["report_path"],
-        last_run["exec_log_path"],
-    )
+            exec_log_path = generate_execution_log(
+                session_summaries=result.session_summaries,
+                instrument_results=result.instrument_results,
+                run_dir=recorder.directory,
+                version=version,
+                config=cfg,
+                start_date=str(start_date),
+                end_date=str(end_date),
+            )
+
+            st.session_state["last_run"] = {
+                "cfg": cfg,
+                "result": result,
+                "recorder": recorder,
+                "report_path": report_path,
+                "exec_log_path": exec_log_path,
+            }
+
+        last_run = st.session_state.get("last_run")
+        if not last_run:
+            st.info(
+                "Configure your parameters in the sidebar and press **Run Backtest** to begin. "
+                "\n\n"
+                "**Data sources:**  Equities are fetched automatically from Yahoo Finance.  "
+                "For Forex instruments, drop OHLCV CSV files into the `data_files/` folder "
+                "and add them to `config/settings.yaml`."
+            )
+        else:
+            render_results(
+                last_run["cfg"],
+                last_run["result"],
+                last_run["recorder"],
+                last_run["report_path"],
+                last_run["exec_log_path"],
+            )
+
+    with guide_tab:
+        render_how_it_works()
 
 
 if __name__ == "__main__":

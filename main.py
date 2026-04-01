@@ -8,7 +8,7 @@ Usage:
     python main.py --start 2024-01-01 --end 2024-06-30 --config config/settings.yaml
 
 For the interactive web dashboard run:
-    streamlit run dashboard/app.py
+    python -m streamlit run dashboard/app.py
 """
 
 import argparse
