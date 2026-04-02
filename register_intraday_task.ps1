@@ -4,8 +4,8 @@ param(
     [string]$Config = "config/settings.yaml",
     [ValidateSet("DEBUG", "INFO", "WARNING", "ERROR")]
     [string]$LogLevel = "INFO",
-    [string]$StartET = "09:30",
-    [string]$EndET = "11:30"
+    [string]$StartET = "09:25",
+    [string]$EndET = "11:00"
 )
 
 $ErrorActionPreference = "Stop"

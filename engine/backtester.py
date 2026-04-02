@@ -73,6 +73,17 @@ class Backtester:
         self.commission     = config["commissions"]["per_trade_flat"]
         self.starting_capital = config["account"]["starting_capital"]
         self.session_end_time = pd.Timestamp(config["session"]["end_time"]).time()
+        trend_mode = config.get("strategy", {}).get("trend_mode", {})
+        self.allow_displacement_gap_entry = bool(
+            trend_mode.get("allow_displacement_gap_entry", False)
+        )
+        self.entry_priority = str(trend_mode.get("entry_priority", "retest_first"))
+        self.displacement_min_atr_pct = float(
+            trend_mode.get("displacement_min_atr_pct", 0.0)
+        )
+        self.displacement_min_body_pct = float(
+            trend_mode.get("displacement_min_body_pct", 0.0)
+        )
 
     # ------------------------------------------------------------------
 
@@ -286,7 +297,14 @@ class Backtester:
         else:
             mode_activated = StrategyMode.BREAKOUT
             signal = detect_breakout_signal(
-                post_bars, opening_range, self.session_end_time
+                post_bars,
+                opening_range,
+                self.session_end_time,
+                allow_displacement_gap_entry=self.allow_displacement_gap_entry,
+                entry_priority=self.entry_priority,
+                displacement_min_atr_pct=self.displacement_min_atr_pct,
+                displacement_min_body_pct=self.displacement_min_body_pct,
+                atr14=atr_14,
             )
 
             if signal is None:

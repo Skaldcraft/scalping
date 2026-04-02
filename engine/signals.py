@@ -23,7 +23,7 @@ Entry logic summary:
 """
 
 import logging
-from typing import Optional, Tuple
+from typing import Optional
 
 import pandas as pd
 
@@ -171,6 +171,76 @@ def _is_full_body_breakout_short(bar: pd.Series, or_low: float) -> bool:
     return max(bar["open"], bar["close"]) < or_low
 
 
+def _is_displacement_gap_long(prior: pd.Series, current: pd.Series) -> bool:
+    """Bullish displacement gap: current low is fully above prior high."""
+    return current["low"] > prior["high"]
+
+
+def _is_displacement_gap_short(prior: pd.Series, current: pd.Series) -> bool:
+    """Bearish displacement gap: current high is fully below prior low."""
+    return current["high"] < prior["low"]
+
+
+def _gap_size(prior: pd.Series, current: pd.Series) -> float:
+    """Absolute price gap between the two bars."""
+    if current["low"] > prior["high"]:
+        return current["low"] - prior["high"]
+    if current["high"] < prior["low"]:
+        return prior["low"] - current["high"]
+    return 0.0
+
+
+def _body_pct(bar: pd.Series) -> float:
+    """Body size as a fraction of total bar range (0–1).  0 for doji."""
+    tr = _total_range(bar)
+    return (_body_size(bar) / tr) if tr > 0 else 0.0
+
+
+def _is_qualified_gap(
+    prior: pd.Series,
+    current: pd.Series,
+    direction: "TradeDirection",
+    atr14: float,
+    min_atr_pct: float,
+    min_body_pct: float,
+) -> bool:
+    """
+    Returns True when a raw displacement gap also satisfies both qualifiers:
+
+    A (ATR gate)  : gap size >= min_atr_pct% of the 14-day ATR.
+    B (Body gate) : the gap bar has a strong directional body
+                    (body / total range >= min_body_pct).
+
+    Either gate is bypassed when its threshold is set to 0.
+    """
+    from data.models import TradeDirection as _TD  # local import avoids circular ref
+    is_gap = (
+        _is_displacement_gap_long(prior, current)
+        if direction == _TD.LONG
+        else _is_displacement_gap_short(prior, current)
+    )
+    if not is_gap:
+        return False
+
+    if min_atr_pct > 0 and atr14 > 0:
+        if _gap_size(prior, current) < (min_atr_pct / 100.0) * atr14:
+            log.debug(
+                "  Gap rejected: size %.5f < %.1f%% ATR (%.5f)",
+                _gap_size(prior, current), min_atr_pct, atr14,
+            )
+            return False
+
+    if min_body_pct > 0:
+        if _body_pct(current) < min_body_pct / 100.0:
+            log.debug(
+                "  Gap rejected: body_pct %.2f < %.1f%%",
+                _body_pct(current) * 100, min_body_pct,
+            )
+            return False
+
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Mode A: Breakout + Slingshot Retest (Casper SMC)
 # ---------------------------------------------------------------------------
@@ -179,6 +249,11 @@ def detect_breakout_signal(
     bars: pd.DataFrame,
     opening_range: OpeningRange,
     session_end_time,
+    allow_displacement_gap_entry: bool = False,
+    entry_priority: str = "retest_first",
+    displacement_min_atr_pct: float = 0.0,
+    displacement_min_body_pct: float = 0.0,
+    atr14: float = 0.0,
 ) -> Optional[SignalContext]:
     """
     Scans post-opening bars for:
@@ -195,7 +270,51 @@ def detect_breakout_signal(
     breakout_direction: Optional[TradeDirection] = None
     breakout_bar_time  = None
 
-    for i, (ts, bar) in enumerate(bars.iterrows()):
+    use_gap_first = entry_priority == "gap_first"
+
+    def _build_breakout_signal(
+        ts,
+        direction: TradeDirection,
+        entry_price: float,
+        signal_time,
+        retest_detected: bool,
+        displacement_detected: bool,
+    ) -> Optional[SignalContext]:
+        sl = opening_range.midpoint
+        if direction == TradeDirection.LONG:
+            risk = entry_price - sl
+            if risk <= 0:
+                return None
+            tp2 = round(entry_price + risk * 2, 6)
+            tp3 = round(entry_price + risk * 3, 6)
+        else:
+            risk = sl - entry_price
+            if risk <= 0:
+                return None
+            tp2 = round(entry_price - risk * 2, 6)
+            tp3 = round(entry_price - risk * 3, 6)
+
+        return SignalContext(
+            session_date=str(ts.date()),
+            instrument="",
+            opening_range=opening_range,
+            atr_14=0.0,
+            atr_threshold=0.0,
+            manipulation_flagged=False,
+            mode=StrategyMode.BREAKOUT,
+            direction=direction,
+            entry_price=entry_price,
+            stop_loss=sl,
+            take_profit_2r=tp2,
+            take_profit_3r=tp3,
+            signal_time=signal_time,
+            retest_detected=retest_detected,
+            displacement_detected=displacement_detected,
+            breakout_candle_time=breakout_bar_time,
+        )
+
+    prev_bar = None
+    for ts, bar in bars.iterrows():
         if ts.time() >= session_end_time:
             break
 
@@ -205,11 +324,13 @@ def detect_breakout_signal(
                 breakout_direction = TradeDirection.LONG
                 breakout_bar_time  = ts
                 log.debug("  Breakout LONG detected at %s", ts)
+                prev_bar = bar
                 continue
             elif _is_full_body_breakout_short(bar, or_low):
                 breakout_direction = TradeDirection.SHORT
                 breakout_bar_time  = ts
                 log.debug("  Breakout SHORT detected at %s", ts)
+                prev_bar = bar
                 continue
 
         # --- Step 2: Watch for mean reversion (breakout failure) ---
@@ -224,66 +345,112 @@ def detect_breakout_signal(
                 log.debug("  Breakout SHORT failed at %s — switching to mean reversion.", ts)
                 return None
 
-        # --- Step 3: Detect valid retest ---
+        # --- Step 3A: Displacement gap entry (gap-first policy) ---
+        if (
+            use_gap_first
+            and allow_displacement_gap_entry
+            and breakout_direction is not None
+            and prev_bar is not None
+        ):
+            gap_qualified = _is_qualified_gap(
+                prev_bar, bar, breakout_direction,
+                atr14, displacement_min_atr_pct, displacement_min_body_pct,
+            )
+
+            if gap_qualified:
+                next_idx = bars.index.get_loc(ts) + 1
+                if next_idx < len(bars):
+                    entry_bar = bars.iloc[next_idx]
+                    entry_price = float(entry_bar["open"])
+                    sig = _build_breakout_signal(
+                        ts=ts,
+                        direction=breakout_direction,
+                        entry_price=entry_price,
+                        signal_time=entry_bar.name.to_pydatetime(),
+                        retest_detected=False,
+                        displacement_detected=True,
+                    )
+                    if sig is not None:
+                        prev_bar = bar
+                        return sig
+
+        # --- Step 3B: Detect valid retest ---
         if breakout_direction == TradeDirection.LONG:
             if _is_valid_retest_long(bar, or_high):
                 # Entry is on the NEXT bar
                 next_idx = bars.index.get_loc(ts) + 1
                 if next_idx >= len(bars):
                     log.debug("  Retest LONG confirmed but no next bar available.")
-                    return None
+                    prev_bar = bar
+                    continue
                 entry_bar = bars.iloc[next_idx]
                 entry_price = float(entry_bar["open"])
-                sl  = opening_range.midpoint
-                risk = entry_price - sl
-                if risk <= 0:
-                    continue
-                return SignalContext(
-                    session_date=str(ts.date()),
-                    instrument="",          # filled by backtester
-                    opening_range=opening_range,
-                    atr_14=0.0,             # filled by backtester
-                    atr_threshold=0.0,
-                    manipulation_flagged=False,
-                    mode=StrategyMode.BREAKOUT,
+                sig = _build_breakout_signal(
+                    ts=ts,
                     direction=TradeDirection.LONG,
                     entry_price=entry_price,
-                    stop_loss=sl,
-                    take_profit_2r=round(entry_price + risk * 2, 6),
-                    take_profit_3r=round(entry_price + risk * 3, 6),
                     signal_time=entry_bar.name.to_pydatetime(),
                     retest_detected=True,
-                    breakout_candle_time=breakout_bar_time,
+                    displacement_detected=False,
                 )
+                if sig is None:
+                    prev_bar = bar
+                    continue
+                prev_bar = bar
+                return sig
+
+        # --- Step 3C: Displacement gap entry (retest-first policy fallback) ---
+        if (
+            (not use_gap_first)
+            and allow_displacement_gap_entry
+            and breakout_direction is not None
+            and prev_bar is not None
+        ):
+            gap_qualified = _is_qualified_gap(
+                prev_bar, bar, breakout_direction,
+                atr14, displacement_min_atr_pct, displacement_min_body_pct,
+            )
+            if gap_qualified:
+                next_idx = bars.index.get_loc(ts) + 1
+                if next_idx < len(bars):
+                    entry_bar = bars.iloc[next_idx]
+                    entry_price = float(entry_bar["open"])
+                    sig = _build_breakout_signal(
+                        ts=ts,
+                        direction=breakout_direction,
+                        entry_price=entry_price,
+                        signal_time=entry_bar.name.to_pydatetime(),
+                        retest_detected=False,
+                        displacement_detected=True,
+                    )
+                    if sig is not None:
+                        prev_bar = bar
+                        return sig
 
         if breakout_direction == TradeDirection.SHORT:
             if _is_valid_retest_short(bar, or_low):
                 next_idx = bars.index.get_loc(ts) + 1
                 if next_idx >= len(bars):
-                    return None
+                    prev_bar = bar
+                    continue
                 entry_bar = bars.iloc[next_idx]
                 entry_price = float(entry_bar["open"])
-                sl  = opening_range.midpoint
-                risk = sl - entry_price
-                if risk <= 0:
-                    continue
-                return SignalContext(
-                    session_date=str(ts.date()),
-                    instrument="",
-                    opening_range=opening_range,
-                    atr_14=0.0,
-                    atr_threshold=0.0,
-                    manipulation_flagged=False,
-                    mode=StrategyMode.BREAKOUT,
+                sig = _build_breakout_signal(
+                    ts=ts,
                     direction=TradeDirection.SHORT,
                     entry_price=entry_price,
-                    stop_loss=sl,
-                    take_profit_2r=round(entry_price - risk * 2, 6),
-                    take_profit_3r=round(entry_price - risk * 3, 6),
                     signal_time=entry_bar.name.to_pydatetime(),
                     retest_detected=True,
-                    breakout_candle_time=breakout_bar_time,
+                    displacement_detected=False,
                 )
+                if sig is None:
+                    prev_bar = bar
+                    continue
+
+                prev_bar = bar
+                return sig
+
+        prev_bar = bar
 
     return None
 

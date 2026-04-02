@@ -120,6 +120,62 @@ class JournalRecorder:
         log.info("Changelog snapshot saved: %s", path)
         return path
 
+    def save_selection_snapshot(self, snapshot: dict) -> dict:
+        """Persist pre-session selection output to JSON and CSV."""
+        json_path = self.run_dir / "selection_snapshot.json"
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(snapshot, f, indent=2)
+
+        csv_path = self.run_dir / "selection_snapshot.csv"
+        rows = snapshot.get("evaluated", [])
+        pd.DataFrame(rows).to_csv(csv_path, index=False)
+
+        log.info("Selection snapshot saved: %s, %s", json_path, csv_path)
+        return {"json": json_path, "csv": csv_path}
+
+    def save_selection_report(self, snapshot: dict) -> Path:
+        """Write a short human-readable summary of the pre-session selection."""
+        path = self.run_dir / "selection_report.txt"
+
+        selected = snapshot.get("selected_symbols", [])
+        rules = snapshot.get("rules", {})
+        evaluated = snapshot.get("evaluated", [])
+
+        lines = [
+            "PulseTrader Pre-Session Selection Report",
+            "=" * 44,
+            f"Selection Date : {snapshot.get('selection_date', 'N/A')}",
+            f"Top N          : {snapshot.get('top_n', 'N/A')}",
+            f"Selected       : {', '.join(selected) if selected else 'none'}",
+            "",
+            "Rules",
+            "-----",
+            f"min_profit_factor : {rules.get('min_profit_factor')}",
+            f"pf_missing_policy : {rules.get('pf_missing_policy', rules.get('require_pf_history'))}",
+            f"max_spread        : {rules.get('max_spread')}",
+            f"spread_missing    : {rules.get('spread_missing_policy', rules.get('require_spread_data'))}",
+            f"overlap_priority  : {rules.get('overlap_priority')}",
+            "",
+            "Evaluated",
+            "---------",
+        ]
+
+        for row in evaluated:
+            reasons = row.get("reasons", [])
+            reason_text = ", ".join(reasons) if reasons else "eligible"
+            lines.append(
+                f"{row.get('symbol')}: selected={row.get('selected')} rank={row.get('rank')} "
+                f"atr14={row.get('atr14')} pf={row.get('profit_factor')} spread={row.get('spread')} "
+                f"manip={row.get('manipulation_status')} gap={row.get('displacement_gap')} "
+                f"reasons={reason_text}"
+            )
+
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+
+        log.info("Selection report saved: %s", path)
+        return path
+
     @property
     def directory(self) -> Path:
         return self.run_dir

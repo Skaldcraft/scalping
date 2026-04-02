@@ -26,6 +26,14 @@ strategy:
   atr_period:                14    # Lookback period for ATR calculation
   manipulation_threshold_pct: 25.0 # OR range >= this % of ATR → manipulation mode
   reward_ratios: [2, 3]            # Both targets tracked and compared
+  trend_mode:
+    allow_displacement_gap_entry: true
+    # retest_first | gap_first
+    entry_priority: retest_first
+    # Option A: gap must be >= N% of ATR14 to qualify (0 = disabled)
+    displacement_min_atr_pct: 3.0
+    # Option B: gap bar body must occupy >= N% of its total range (0 = disabled)
+    displacement_min_body_pct: 60.0
 
 risk:
   profit_factor_floor:          1.5  # Halt if PF drops below this
@@ -59,6 +67,41 @@ instruments:
   # Example:
   #   EURUSD: "data_files/EURUSD_5min.csv"
   #   GBPUSD: "data_files/GBPUSD_5min.csv"
+
+pre_session:
+  enabled: true
+  run_time_et: "09:25"
+  top_n: 3
+  freeze_daily_selection: true
+  # Optional path for frozen daily selection snapshots.
+  # Default: results/_selection_state
+  frozen_selection_dir: null
+  fallback_to_config_instruments: true
+  # If empty, the selector defaults to instruments.equities.
+  # You can also provide objects: {symbol: "AAPL", asset_class: "equity"}
+  universe: []
+  selection_rules:
+    min_profit_factor: 1.5
+    min_trades_for_pf: 10
+    # If set, only the latest N trades are used in PF calculation.
+    pf_lookback_trades: null
+    # Preferred missing-data policies:
+    # - allow: do not reject solely for missing data
+    # - reject: exclude symbol when data is missing
+    pf_missing_policy: allow
+    spread_missing_policy: allow
+    # Legacy toggles (still supported for compatibility):
+    require_pf_history: false
+    max_spread: null
+    require_spread_data: false
+  # Optional manual spread map used by Phase 1 selector.
+  # Example: {AAPL: 0.02, NVDA: 0.03}
+  spread_overrides: {}
+  # Optional overlap metadata used for tie-break ranking.
+  # Example:
+  # overlap_signals:
+  #   AAPL: {manipulation_status: true, displacement_gap: false}
+  overlap_signals: {}
 
 commissions:
   per_trade_flat: 0.50             # Flat $ commission deducted per trade (both entry and exit combined)
