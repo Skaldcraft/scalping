@@ -41,6 +41,13 @@ from journal.recorder import JournalRecorder
 from journal.run_report import generate_run_report
 from journal.execution_log import generate_execution_log
 from risk.circuit_breaker import CircuitBreaker
+from dashboard.results_manager import (
+    delete_items_permanently,
+    list_results,
+    move_items_to_trash,
+    restore_items_from_trash,
+    summarize as summarize_results,
+)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -1174,6 +1181,173 @@ def render_home():
     st.write("Use the tabs above to move between `PulseTrader`, `Backtest`, and `How it works`.")
 
 
+def render_results_manager():
+    st.title("Results Manager")
+    st.caption("Browse and clean saved runs from the interface.")
+
+    active_records, trash_records = list_results(RESULTS_PATH)
+    summary = summarize_results(active_records, trash_records)
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total Runs", summary["total_runs"])
+    m2.metric("Total Size", summary["total_size"])
+    m3.metric("In Trash", summary["trash_count"])
+    m4.metric("Reclaimable", summary["reclaimable"])
+
+    search = st.text_input(
+        "Search results",
+        value="",
+        placeholder="TSLA, 20260402, batch_2026...",
+        help="Search by folder name or symbols found in trade logs.",
+    ).strip().lower()
+
+    def _matches(record: dict) -> bool:
+        if not search:
+            return True
+        return search in record.get("id", "").lower() or search in record.get("symbols", "").lower()
+
+    tabs = st.tabs(["Backtests", "Weekly Batches", "Trash"])
+
+    with tabs[0]:
+        backtests = [r for r in active_records if r.get("kind") == "backtest" and _matches(r)]
+        if backtests:
+            df = pd.DataFrame(
+                [
+                    {
+                        "Run": r["id"],
+                        "Timestamp": r["timestamp"] or r["modified"],
+                        "Trades": r["trades"],
+                        "Net P&L (2R)": r["net_pnl_2r"],
+                        "Symbols": r["symbols"],
+                        "Size": r["size"],
+                    }
+                    for r in backtests
+                ]
+            )
+            st.dataframe(df, width="stretch", hide_index=True)
+
+            selected_backtests = st.multiselect(
+                "Select backtests",
+                options=[r["id"] for r in backtests],
+                key="rm_selected_backtests",
+            )
+            if st.button("Move selected backtests to Trash", key="rm_trash_backtests"):
+                if not selected_backtests:
+                    st.error("Select at least one backtest to move.")
+                else:
+                    moved, skipped = move_items_to_trash(RESULTS_PATH, selected_backtests)
+                    if moved:
+                        st.success(f"Moved {moved} backtest folder(s) to Trash.")
+                    if skipped:
+                        st.warning(f"Skipped: {', '.join(skipped)}")
+        else:
+            st.caption("No backtests match your search.")
+
+    with tabs[1]:
+        batches = [r for r in active_records if r.get("kind") == "weekly_batch" and _matches(r)]
+        if batches:
+            df = pd.DataFrame(
+                [
+                    {
+                        "Batch": r["id"],
+                        "Updated": r["modified"],
+                        "Trades": r["trades"],
+                        "Net P&L (2R)": r["net_pnl_2r"],
+                        "Symbols": r["symbols"],
+                        "Size": r["size"],
+                    }
+                    for r in batches
+                ]
+            )
+            st.dataframe(df, width="stretch", hide_index=True)
+
+            selected_batches = st.multiselect(
+                "Select weekly batches",
+                options=[r["id"] for r in batches],
+                key="rm_selected_batches",
+            )
+            if st.button("Move selected weekly batches to Trash", key="rm_trash_batches"):
+                if not selected_batches:
+                    st.error("Select at least one batch to move.")
+                else:
+                    moved, skipped = move_items_to_trash(RESULTS_PATH, selected_batches)
+                    if moved:
+                        st.success(f"Moved {moved} batch folder(s) to Trash.")
+                    if skipped:
+                        st.warning(f"Skipped: {', '.join(skipped)}")
+        else:
+            st.caption("No weekly batches match your search.")
+
+    with tabs[2]:
+        trash_filtered = [r for r in trash_records if _matches(r)]
+        if trash_filtered:
+            df = pd.DataFrame(
+                [
+                    {
+                        "Item": r["id"],
+                        "Type": r["kind"],
+                        "Updated": r["modified"],
+                        "Trades": r["trades"],
+                        "Net P&L (2R)": r["net_pnl_2r"],
+                        "Size": r["size"],
+                    }
+                    for r in trash_filtered
+                ]
+            )
+            st.dataframe(df, width="stretch", hide_index=True)
+
+            selected_trash = st.multiselect(
+                "Select Trash items",
+                options=[r["id"] for r in trash_filtered],
+                key="rm_selected_trash",
+            )
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("Restore selected", key="rm_restore"):
+                    if not selected_trash:
+                        st.error("Select at least one Trash item to restore.")
+                    else:
+                        restored, skipped = restore_items_from_trash(RESULTS_PATH, selected_trash)
+                        if restored:
+                            st.success(f"Restored {restored} item(s).")
+                        if skipped:
+                            st.warning(f"Skipped: {', '.join(skipped)}")
+            with c2:
+                confirm_text = st.text_input(
+                    "Type DELETE to permanently remove selected",
+                    key="rm_delete_confirm",
+                )
+                delete_ack = st.checkbox(
+                    "I understand this action is permanent",
+                    key="rm_delete_ack",
+                )
+                can_delete = bool(selected_trash) and confirm_text == "DELETE" and delete_ack
+                if st.button(
+                    "Delete selected permanently",
+                    key="rm_delete",
+                    disabled=not can_delete,
+                ):
+                    if not selected_trash:
+                        st.error("Select at least one Trash item to delete.")
+                    elif confirm_text != "DELETE":
+                        st.error("Type DELETE exactly to confirm permanent deletion.")
+                    elif not delete_ack:
+                        st.error("Check the permanent delete acknowledgment box.")
+                    else:
+                        deleted, skipped, reclaimed = delete_items_permanently(RESULTS_PATH, selected_trash)
+                        if deleted:
+                            reclaimed_mb = reclaimed / (1024 * 1024)
+                            st.success(f"Deleted {deleted} item(s) permanently. Reclaimed {reclaimed_mb:.2f} MB.")
+                        if not deleted and not skipped:
+                            st.info("No items were deleted.")
+                        if skipped:
+                            st.warning(f"Skipped: {', '.join(skipped)}")
+        else:
+            st.caption("Trash is empty.")
+
+    st.caption(f"Managed results folder: {RESULTS_PATH}")
+
+
 def build_long_view(results_dir: Path, limit: int = 5) -> dict:
     weekly = build_weekly_long_view(results_dir, weeks=limit)
     return {"recent": weekly["weeks"], "trend": weekly["trend"]}
@@ -1583,6 +1757,7 @@ def main():
     page_labels = {
         "pulse": "🏠 PulseTrader",
         "backtest": "📊 Backtest",
+        "results": "🗂️ Results Manager",
         "guide": "📘 How it works",
     }
     page_keys = list(page_labels.keys())
@@ -1698,6 +1873,9 @@ def main():
                 last_run["report_path"],
                 last_run["exec_log_path"],
             )
+
+    elif selected_page == "results":
+        render_results_manager()
 
     else:
         render_how_it_works()
