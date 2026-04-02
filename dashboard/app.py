@@ -131,11 +131,19 @@ st.markdown(
         opacity: 1;
       }
             section[data-testid="stSidebar"] a,
+            [data-testid="stMarkdownContainer"] a,
             .stMarkdown a,
             .stCaption a {
                 color: #b6862c !important;
             }
+            section[data-testid="stSidebar"] a:visited,
+            [data-testid="stMarkdownContainer"] a:visited,
+            .stMarkdown a:visited,
+            .stCaption a:visited {
+                color: #b6862c !important;
+            }
             section[data-testid="stSidebar"] a:hover,
+            [data-testid="stMarkdownContainer"] a:hover,
             .stMarkdown a:hover,
             .stCaption a:hover {
                 color: #d6a84f !important;
@@ -988,10 +996,10 @@ def render_weekly_equity_overview(symbols: list[str], results_dir: Path):
     if overall:
         st.plotly_chart(_sparkline_figure(overall, "Portfolio Weekly Net P&L"), width="stretch")
     else:
-        st.info("No weekly data yet for the portfolio overview.")
+        st.caption("No weekly data yet for the portfolio overview.")
 
     if not symbols:
-        st.info("No master-universe symbols configured yet.")
+        st.caption("No master-universe symbols configured yet.")
         return
 
     st.write("Per-symbol weekly performance")
@@ -1008,7 +1016,7 @@ def render_weekly_equity_overview(symbols: list[str], results_dir: Path):
                     f"Trades: {latest['trades']} | Win Rate: {latest['win_rate']:.1f}%"
                 )
             else:
-                st.info("No data yet")
+                st.caption("No data yet")
 
 
 def render_how_it_works():
@@ -1133,7 +1141,7 @@ def render_home():
         if weekly_rows:
             st.dataframe(pd.DataFrame(weekly_rows), width="stretch", hide_index=True)
         else:
-            st.info("No weekly history found yet.")
+            st.caption("No weekly history found yet.")
 
     with summary_tab:
         if latest_batch:
@@ -1160,7 +1168,7 @@ def render_home():
                 )
             st.caption(f"Recent view status: {classify_long_view_status(recent_weeks, review_cfg)}")
         else:
-            st.info("No weekly batch report found yet.")
+            st.caption("No weekly batch report found yet.")
 
     st.divider()
     st.write("Use the tabs above to move between `PulseTrader`, `Backtest`, and `How it works`.")
@@ -1297,7 +1305,7 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
 
         if reason_counts:
             sorted_reasons = sorted(reason_counts.items(), key=lambda item: item[1], reverse=True)
-            st.info("Most common no-trade reasons in this run:")
+            st.caption("Most common no-trade reasons in this run:")
             for reason, count in sorted_reasons[:5]:
                 st.write(f"- {reason}: {count}")
 
@@ -1454,7 +1462,7 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
 
             st.dataframe(pd.DataFrame(recent_weeks), width="stretch", hide_index=True)
         else:
-            st.info("No saved weekly history found yet for the long-view summary.")
+            st.caption("No saved weekly history found yet for the long-view summary.")
     else:
         st.caption("Long-view review is disabled in config.")
 
