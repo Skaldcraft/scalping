@@ -1552,11 +1552,22 @@ def main():
     st.sidebar.caption(
         "Background updates run every 15 minutes during 09:25–11:00 ET through the scheduled task."
     )
+
+    query_auto = st.query_params.get("auto_refresh", "1")
+    if isinstance(query_auto, list):
+        query_auto = query_auto[0]
+    default_auto_refresh = str(query_auto).lower() not in {"0", "false", "no", "off"}
+
     auto_refresh_enabled = st.sidebar.checkbox(
         "Auto-refresh page",
-        value=True,
+        value=default_auto_refresh,
         help="Reload the interface every 15 minutes so the latest background run appears automatically.",
+        key="pref_auto_refresh",
     )
+    auto_refresh_param = "1" if auto_refresh_enabled else "0"
+    if st.query_params.get("auto_refresh") != auto_refresh_param:
+        st.query_params["auto_refresh"] = auto_refresh_param
+
     if auto_refresh_enabled:
         enable_dashboard_auto_refresh(15)
     st.sidebar.caption("Use `Run Backtest` below if you want an immediate update right now.")
