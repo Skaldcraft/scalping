@@ -17,6 +17,7 @@ The dashboard provides:
   - Download buttons for all result files
 """
 
+import copy
 import sys
 import logging
 import json
@@ -49,6 +50,22 @@ WEEKLY_HISTORY_START = date(2026, 3, 9)
 st.markdown(
     """
     <style>
+            :root {
+                --pulse-panel-border: rgba(98, 68, 24, 0.22);
+                --pulse-panel-bg: rgba(98, 68, 24, 0.08);
+                --pulse-tab-border: rgba(98, 68, 24, 0.22);
+                --pulse-tab-bg: rgba(98, 68, 24, 0.06);
+                --pulse-tab-active: linear-gradient(90deg, rgba(201, 156, 58, 0.24), rgba(34, 154, 120, 0.18));
+            }
+            @media (prefers-color-scheme: dark) {
+                :root {
+                    --pulse-panel-border: rgba(233, 190, 102, 0.22);
+                    --pulse-panel-bg: rgba(233, 190, 102, 0.10);
+                    --pulse-tab-border: rgba(233, 190, 102, 0.22);
+                    --pulse-tab-bg: rgba(233, 190, 102, 0.08);
+                    --pulse-tab-active: linear-gradient(90deg, rgba(201, 156, 58, 0.28), rgba(34, 154, 120, 0.20));
+                }
+            }
       .pulse-brand {
         padding: 0.25rem 0 0.75rem 0;
       }
@@ -72,13 +89,13 @@ st.markdown(
       }
       .theme-note--small {
         font-size: 0.9rem;
-        opacity: 0.8;
+                opacity: 0.9;
       }
       .soft-panel {
         padding: 0.9rem 1rem;
         border-radius: 14px;
-        border: 1px solid rgba(127, 127, 127, 0.18);
-        background: rgba(127, 127, 127, 0.08);
+                border: 1px solid var(--pulse-panel-border);
+                background: var(--pulse-panel-bg);
         color: inherit;
       }
       [data-testid="stAppSkipLink"],
@@ -88,24 +105,6 @@ st.markdown(
       }
       h1 a, h2 a, h3 a, h4 a, h5 a, h6 a {
         display: none !important;
-      }
-      @keyframes pulseCoinSpin {
-        from { transform: rotate(0deg); }
-        to { transform: rotate(360deg); }
-      }
-      [data-testid="stStatusWidget"] {
-        position: relative;
-      }
-      [data-testid="stStatusWidget"] > * {
-        opacity: 0 !important;
-      }
-      [data-testid="stStatusWidget"]::after {
-        content: "🪙";
-        display: inline-block;
-        font-size: 1rem;
-        filter: grayscale(100%);
-        opacity: 0.78;
-        animation: pulseCoinSpin 1.2s linear infinite;
       }
       div[data-testid="stButton"] > button[kind="secondary"] {
         border-radius: 999px;
@@ -118,19 +117,37 @@ st.markdown(
         height: 2.35rem;
         padding: 0.15rem 0.95rem;
         border-radius: 999px;
-        border: 1px solid rgba(127, 127, 127, 0.18);
-        background: rgba(127, 127, 127, 0.05);
+                border: 1px solid var(--pulse-tab-border);
+                background: var(--pulse-tab-bg);
         color: inherit !important;
-        opacity: 0.82;
+                opacity: 0.92;
         font-size: 1.08rem !important;
         font-weight: 600 !important;
-        filter: grayscale(35%);
+                filter: none;
       }
       button[data-baseweb="tab"][aria-selected="true"] {
-        background: linear-gradient(90deg, rgba(74, 144, 226, 0.20), rgba(0, 200, 150, 0.16));
+                background: var(--pulse-tab-active);
         color: inherit !important;
         opacity: 1;
       }
+            section[data-testid="stSidebar"] a,
+            .stMarkdown a,
+            .stCaption a {
+                color: #b6862c !important;
+            }
+            section[data-testid="stSidebar"] a:hover,
+            .stMarkdown a:hover,
+            .stCaption a:hover {
+                color: #d6a84f !important;
+            }
+            section[data-testid="stSidebar"] [data-baseweb="select"] *:focus,
+            section[data-testid="stSidebar"] input:focus,
+            section[data-testid="stSidebar"] textarea:focus,
+            section[data-testid="stSidebar"] [data-baseweb="tag"],
+            section[data-testid="stSidebar"] [aria-selected="true"] {
+                box-shadow: 0 0 0 1px rgba(201, 156, 58, 0.55) !important;
+                border-color: rgba(201, 156, 58, 0.65) !important;
+            }
     </style>
     """,
     unsafe_allow_html=True,
@@ -204,29 +221,117 @@ def build_sidebar(default_cfg: dict) -> tuple[dict, date, date]:
         max_value=date.today(),
     )
 
-    st.sidebar.subheader("Instruments")
+    st.sidebar.subheader("Universe & Selection")
     default_equities = default_cfg["instruments"].get("equities", [])
+    tracked_universe = tracked_universe_symbols(default_cfg)
+    pre_cfg = default_cfg.get("pre_session", {}) or {}
+    pre_rules = pre_cfg.get("selection_rules", {}) or {}
+
+    pre_session_enabled = st.sidebar.checkbox(
+        "Enable Pre-Session Top-N Selector",
+        value=bool(pre_cfg.get("enabled", False)),
+        help="When enabled, the run trades only the session selection (Top-N) instead of the full master universe list.",
+    )
+    selector_top_n = st.sidebar.number_input(
+        "Top-N Symbols",
+        min_value=1,
+        max_value=10,
+        value=int(pre_cfg.get("top_n", 3)),
+        step=1,
+    )
+    freeze_daily = st.sidebar.checkbox(
+        "Freeze Daily Selection",
+        value=bool(pre_cfg.get("freeze_daily_selection", True)),
+        help="Reuses the first computed selection for the same date on subsequent intraday runs.",
+    )
+
+    pf_missing_policy = st.sidebar.selectbox(
+        "PF Missing Policy",
+        options=["allow", "reject"],
+        index=["allow", "reject"].index(str(pre_rules.get("pf_missing_policy", "allow"))),
+        help="How to handle symbols with missing Profit Factor history.",
+    )
+    spread_missing_policy = st.sidebar.selectbox(
+        "Spread Missing Policy",
+        options=["allow", "reject"],
+        index=["allow", "reject"].index(str(pre_rules.get("spread_missing_policy", "allow"))),
+        help="How to handle symbols without spread data.",
+    )
+
+    pf_lookback_trades_raw = st.sidebar.number_input(
+        "PF Lookback Trades (0 = all)",
+        min_value=0,
+        max_value=500,
+        value=int(pre_rules.get("pf_lookback_trades") or 0),
+        step=5,
+    )
+    pf_lookback_trades = None if pf_lookback_trades_raw == 0 else int(pf_lookback_trades_raw)
+
+    with st.sidebar.expander("Legacy Behavior", expanded=False):
+        legacy_require_pf = st.checkbox(
+            "Legacy toggle: require PF history",
+            value=bool(pre_rules.get("require_pf_history", False)),
+        )
+        legacy_require_spread = st.checkbox(
+            "Legacy toggle: require spread data",
+            value=bool(pre_rules.get("require_spread_data", False)),
+        )
+
+    st.sidebar.markdown("**Tracked Universe**")
+    if tracked_universe:
+        st.sidebar.caption(", ".join(tracked_universe))
+    else:
+        st.sidebar.caption("No tracked universe configured yet.")
+
+    with st.sidebar.expander("Single Symbol Override", expanded=False):
+        st.caption("Run one tracked symbol for this backtest only. Does not change saved config.")
+        single_symbol_enabled = st.checkbox(
+            "Use one tracked symbol",
+            value=False,
+        )
+        single_symbol_input = st.text_input(
+            "Tracked Symbol",
+            value="",
+            placeholder="AAPL",
+            help="Enter one symbol from the tracked universe shown above.",
+            disabled=not single_symbol_enabled,
+        ).strip().upper()
+        valid_single_symbol = single_symbol_input in tracked_universe if single_symbol_input else False
+        if single_symbol_enabled and single_symbol_input and not valid_single_symbol:
+            st.warning("Symbol not found in tracked universe.")
+        if single_symbol_enabled and valid_single_symbol:
+            st.success(f"Single-symbol run ready: {single_symbol_input}")
+
     st.session_state.setdefault("custom_symbols_raw", "")
-    st.session_state.setdefault("selected_equities", list(default_equities))
-    custom_symbols_raw = st.sidebar.text_input(
-        "Custom Symbols",
-        value=st.session_state["custom_symbols_raw"],
-        placeholder="TSLA, AMD, INTC",
-        help="Comma-separated symbols added to the default list.",
-    )
-    custom_symbols = parse_custom_symbols(custom_symbols_raw)
-    equity_options = list(dict.fromkeys([
-        "AAPL", "NVDA", "AMZN", "MSFT", "GOOGL", "META", "QQQ", "SPY",
-        *default_equities,
-        *custom_symbols,
-    ]))
-    equities = st.sidebar.multiselect(
-        "Equities",
-        options=equity_options,
-        default=st.session_state["selected_equities"],
-    )
-    st.session_state["selected_equities"] = equities
-    st.session_state["custom_symbols_raw"] = custom_symbols_raw
+    st.session_state.setdefault("selected_equities", list(default_equities or tracked_universe))
+    with st.sidebar.expander("Research Overrides", expanded=False):
+        st.caption("Use only for testing custom subsets. Normal runs use the tracked universe above.")
+        research_override_enabled = st.checkbox(
+            "Override universe for this run",
+            value=False,
+        )
+        custom_symbols_raw = st.text_input(
+            "Research Symbols",
+            value=st.session_state["custom_symbols_raw"],
+            placeholder="TSLA, AMD, INTC",
+            help="Comma-separated symbols added only for research-mode runs.",
+            disabled=not research_override_enabled,
+        )
+        custom_symbols = parse_custom_symbols(custom_symbols_raw)
+        equity_options = list(dict.fromkeys([
+            *tracked_universe,
+            "AAPL", "NVDA", "AMZN", "MSFT", "GOOGL", "META", "QQQ", "SPY",
+            *[sym.upper() for sym in default_equities],
+            *custom_symbols,
+        ]))
+        equities = st.multiselect(
+            "Research Universe",
+            options=equity_options,
+            default=st.session_state["selected_equities"],
+            disabled=not research_override_enabled,
+        )
+        st.session_state["selected_equities"] = equities
+        st.session_state["custom_symbols_raw"] = custom_symbols_raw
 
     st.sidebar.subheader("Strategy")
     or_minutes = st.sidebar.selectbox(
@@ -243,11 +348,33 @@ def build_sidebar(default_cfg: dict) -> tuple[dict, date, date]:
         step=1,
     )
 
-    session_end = st.sidebar.selectbox(
-        "Session Gate",
-        options=["11:00", "11:30"],
-        index=0,
+    trend_mode_cfg = (default_cfg.get("strategy", {}) or {}).get("trend_mode", {}) or {}
+    allow_gap_entry = st.sidebar.checkbox(
+        "Enable Displacement Gap Entries",
+        value=bool(trend_mode_cfg.get("allow_displacement_gap_entry", True)),
     )
+    entry_priority = st.sidebar.selectbox(
+        "Trend Entry Priority",
+        options=["retest_first", "gap_first"],
+        index=["retest_first", "gap_first"].index(str(trend_mode_cfg.get("entry_priority", "retest_first"))),
+    )
+    displacement_min_atr_pct = st.sidebar.slider(
+        "Gap Min Size (% of ATR14)",
+        min_value=0.0,
+        max_value=15.0,
+        value=float(trend_mode_cfg.get("displacement_min_atr_pct", 3.0)),
+        step=0.5,
+    )
+    displacement_min_body_pct = st.sidebar.slider(
+        "Gap Bar Min Body (%)",
+        min_value=0.0,
+        max_value=100.0,
+        value=float(trend_mode_cfg.get("displacement_min_body_pct", 60.0)),
+        step=5.0,
+    )
+
+    session_end = "11:00"
+    st.sidebar.caption("Session Gate is fixed at 11:00 ET for alignment with automation.")
 
     st.sidebar.subheader("Risk Management")
     starting_capital = st.sidebar.number_input(
@@ -276,22 +403,43 @@ def build_sidebar(default_cfg: dict) -> tuple[dict, date, date]:
     )
 
     # Build config override
-    cfg = dict(default_cfg)
+    cfg = copy.deepcopy(default_cfg)
     cfg["account"] = {
         "starting_capital":   starting_capital,
         "risk_per_trade_pct": risk_pct,
         "daily_loss_limit_pct": daily_loss_pct,
     }
     cfg["opening_range"] = {"candle_size_minutes": or_minutes}
-    cfg["strategy"] = {
-        "atr_period": 14,
-        "manipulation_threshold_pct": manip_threshold,
-        "reward_ratios": [2, 3],
-    }
+    cfg.setdefault("strategy", {})["atr_period"] = 14
+    cfg["strategy"]["manipulation_threshold_pct"] = manip_threshold
+    cfg["strategy"]["reward_ratios"] = [2, 3]
+    cfg["strategy"].setdefault("trend_mode", {})
+    cfg["strategy"]["trend_mode"]["allow_displacement_gap_entry"] = allow_gap_entry
+    cfg["strategy"]["trend_mode"]["entry_priority"] = entry_priority
+    cfg["strategy"]["trend_mode"]["displacement_min_atr_pct"] = displacement_min_atr_pct
+    cfg["strategy"]["trend_mode"]["displacement_min_body_pct"] = displacement_min_body_pct
+
+    cfg.setdefault("pre_session", {})["enabled"] = pre_session_enabled
+    cfg["pre_session"]["top_n"] = int(selector_top_n)
+    cfg["pre_session"]["freeze_daily_selection"] = freeze_daily
+    cfg["pre_session"].setdefault("selection_rules", {})
+    cfg["pre_session"]["selection_rules"]["pf_missing_policy"] = pf_missing_policy
+    cfg["pre_session"]["selection_rules"]["spread_missing_policy"] = spread_missing_policy
+    cfg["pre_session"]["selection_rules"]["pf_lookback_trades"] = pf_lookback_trades
+    cfg["pre_session"]["selection_rules"]["require_pf_history"] = legacy_require_pf
+    cfg["pre_session"]["selection_rules"]["require_spread_data"] = legacy_require_spread
+
     cfg["session"]["end_time"]   = session_end
     cfg["commissions"]["per_trade_flat"] = commission
-    cfg["instruments"]["equities"] = equities
-    cfg["instruments"]["custom_symbols"] = custom_symbols
+    if single_symbol_enabled and valid_single_symbol:
+        cfg["instruments"]["equities"] = [single_symbol_input]
+        cfg["instruments"]["custom_symbols"] = []
+    elif research_override_enabled:
+        cfg["instruments"]["equities"] = equities
+        cfg["instruments"]["custom_symbols"] = custom_symbols
+    else:
+        cfg["instruments"]["equities"] = tracked_universe or default_equities
+        cfg["instruments"]["custom_symbols"] = []
 
     return cfg, start_date, end_date
 
@@ -313,7 +461,7 @@ def equity_curve_chart(metrics_2r: dict, metrics_3r: dict, starting_capital: flo
     if curve_3r:
         fig.add_trace(go.Scatter(
             y=curve_3r, mode="lines", name="3:1 R/R",
-            line=dict(color="#4A90E2", width=2, dash="dash"),
+            line=dict(color="#C99C3A", width=2, dash="dash"),
         ))
     fig.add_hline(
         y=starting_capital, line_dash="dot",
@@ -406,10 +554,76 @@ def parse_custom_symbols(raw: str) -> list[str]:
     return [sym.strip().upper() for sym in raw.split(",") if sym.strip()]
 
 
-def preview_equities(default_cfg: dict) -> list[str]:
-    base = list(default_cfg["instruments"].get("equities", []))
-    custom = parse_custom_symbols(st.session_state.get("custom_symbols_raw", ""))
-    return list(dict.fromkeys(base + custom))
+def tracked_universe_symbols(default_cfg: dict) -> list[str]:
+    pre_cfg = default_cfg.get("pre_session", {}) or {}
+    raw_universe = pre_cfg.get("universe", [])
+    symbols: list[str] = []
+
+    for item in raw_universe:
+        if isinstance(item, str):
+            symbols.append(item.upper())
+        elif isinstance(item, dict) and item.get("symbol"):
+            symbols.append(str(item["symbol"]).upper())
+
+    if symbols:
+        return list(dict.fromkeys(symbols))
+
+    base = list(default_cfg.get("instruments", {}).get("equities", []))
+    return list(dict.fromkeys(sym.upper() for sym in base if sym))
+
+
+def tracked_universe_entries(default_cfg: dict) -> list[dict]:
+    pre_cfg = default_cfg.get("pre_session", {}) or {}
+    raw_universe = pre_cfg.get("universe", [])
+    entries: list[dict] = []
+
+    for item in raw_universe:
+        if isinstance(item, str):
+            entries.append({"symbol": item.upper(), "asset_class": "equity"})
+        elif isinstance(item, dict) and item.get("symbol"):
+            entries.append(
+                {
+                    "symbol": str(item["symbol"]).upper(),
+                    "asset_class": str(item.get("asset_class", "equity")).lower(),
+                }
+            )
+
+    if entries:
+        return entries
+
+    return [
+        {"symbol": sym.upper(), "asset_class": "equity"}
+        for sym in default_cfg.get("instruments", {}).get("equities", [])
+        if sym
+    ]
+
+
+def _display_symbol(symbol: str) -> str:
+    display_map = {
+        "EURUSD=X": "EUR/USD",
+        "GBPUSD=X": "GBP/USD",
+        "JPY=X": "USD/JPY",
+        "XAUUSD=X": "XAU/USD (Gold)",
+    }
+    return display_map.get(symbol.upper(), symbol.upper())
+
+
+def grouped_tracked_universe(default_cfg: dict) -> dict[str, list[str]]:
+    groups: dict[str, list[str]] = {}
+    for entry in tracked_universe_entries(default_cfg):
+        asset_class = entry.get("asset_class", "equity")
+        groups.setdefault(asset_class, []).append(_display_symbol(entry["symbol"]))
+    return groups
+
+
+def _display_asset_class(asset_class: str) -> str:
+    label_map = {
+        "equity": "Equities",
+        "index": "Indices",
+        "forex": "Forex",
+        "metal": "Gold / Metals",
+    }
+    return label_map.get(asset_class.lower(), asset_class.replace("_", " ").title())
 
 
 def _trade_result_from_row(row: pd.Series) -> TradeResult:
@@ -449,6 +663,14 @@ def _trade_result_from_row(row: pd.Series) -> TradeResult:
     )
 
 
+def _safe_read_csv(path: Path) -> pd.DataFrame:
+    """Read CSV safely and return an empty DataFrame on empty/corrupt files."""
+    try:
+        return pd.read_csv(path)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame()
+
+
 def load_run_history(results_dir: Path, limit: int = 10) -> list[dict]:
     if not results_dir.exists():
         return []
@@ -461,7 +683,7 @@ def load_run_history(results_dir: Path, limit: int = 10) -> list[dict]:
     history = []
     for run_dir in run_dirs[:limit]:
         try:
-            trade_df = pd.read_csv(run_dir / "trade_log.csv")
+            trade_df = _safe_read_csv(run_dir / "trade_log.csv")
             if trade_df.empty:
                 continue
             cfg = yaml.safe_load((run_dir / "config_snapshot.yaml").read_text()) if (run_dir / "config_snapshot.yaml").exists() else load_default_config()
@@ -495,7 +717,7 @@ def load_latest_run_summary(results_dir: Path) -> dict | None:
         return None
 
     run_dir = run_dirs[0]
-    trade_df = pd.read_csv(run_dir / "trade_log.csv")
+    trade_df = _safe_read_csv(run_dir / "trade_log.csv")
     if trade_df.empty:
         return None
 
@@ -505,11 +727,15 @@ def load_latest_run_summary(results_dir: Path) -> dict | None:
     metrics_2r = metrics["2r"]
     metrics_3r = metrics["3r"]
 
+    session_count = 0
+    if (run_dir / "session_log.csv").exists():
+        session_count = len(_safe_read_csv(run_dir / "session_log.csv"))
+
     return {
         "run_dir": run_dir,
         "version": cfg.get("version", "?"),
         "trades": metrics_2r.get("total_trades", 0),
-        "sessions": len(pd.read_csv(run_dir / "session_log.csv")) if (run_dir / "session_log.csv").exists() else 0,
+        "sessions": session_count,
         "win_rate_2r": metrics_2r.get("win_rate", 0) * 100,
         "profit_factor_2r": metrics_2r.get("profit_factor"),
         "net_pnl_2r": metrics_2r.get("net_pnl", 0),
@@ -518,6 +744,16 @@ def load_latest_run_summary(results_dir: Path) -> dict | None:
         "net_pnl_3r": metrics_3r.get("net_pnl", 0),
         "drawdown_pct": metrics_2r.get("max_drawdown_pct", 0) * 100,
     }
+
+
+def load_selection_snapshot(run_dir: Path) -> dict | None:
+    snapshot_path = run_dir / "selection_snapshot.json"
+    if not snapshot_path.exists():
+        return None
+    try:
+        return json.loads(snapshot_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
 
 
 def load_latest_batch_summary(results_dir: Path) -> dict | None:
@@ -541,7 +777,7 @@ def load_latest_batch_summary(results_dir: Path) -> dict | None:
     summary = json.loads(weekly_json.read_text()) if weekly_json.exists() else {}
     weeks = summary.get("weeks", []) if isinstance(summary, dict) else []
     if not weeks and weekly_csv.exists():
-        df = pd.read_csv(weekly_csv)
+        df = _safe_read_csv(weekly_csv)
         weeks = df.to_dict(orient="records")
 
     filtered_weeks = []
@@ -646,7 +882,7 @@ def build_weekly_equity_overview(results_dir: Path, symbols: list[str]) -> dict:
     trade_logs = sorted(results_dir.rglob("trade_log.csv")) if results_dir.exists() else []
     for trade_log in trade_logs:
         try:
-            trade_df = pd.read_csv(trade_log)
+            trade_df = _safe_read_csv(trade_log)
         except Exception:
             continue
         if trade_df.empty or "session_date" not in trade_df.columns:
@@ -755,7 +991,7 @@ def render_weekly_equity_overview(symbols: list[str], results_dir: Path):
         st.info("No weekly data yet for the portfolio overview.")
 
     if not symbols:
-        st.info("No equities selected yet.")
+        st.info("No master-universe symbols configured yet.")
         return
 
     st.write("Per-symbol weekly performance")
@@ -783,7 +1019,7 @@ def render_how_it_works():
 
     st.markdown(
         """
-        <div style="padding: 1rem 1.1rem; border-radius: 16px; border: 1px solid rgba(241,224,183,0.18); background: linear-gradient(135deg, rgba(74,144,226,0.16), rgba(0,200,150,0.10)); margin-bottom: 0.85rem;">
+        <div style="padding: 1rem 1.1rem; border-radius: 16px; border: 1px solid rgba(201,156,58,0.24); background: linear-gradient(135deg, rgba(201,156,58,0.18), rgba(34,154,120,0.12)); margin-bottom: 0.85rem;">
             <h3 style="margin:0 0 0.35rem 0;">Start here</h3>
             <p style="margin:0;">
                 PulseTrader helps you study how a rule-based scalping idea would have behaved on past market data.
@@ -812,24 +1048,26 @@ def render_how_it_works():
 def render_home():
     st.write("")
 
-    st.subheader("Quick Symbol Editor")
-    st.session_state.setdefault("custom_symbols_raw", "")
-    custom_symbols_raw = st.text_input(
-        "Custom Symbols",
-        value=st.session_state["custom_symbols_raw"],
-        placeholder="TSLA, AMD, INTC",
-        help="Comma-separated symbols added to the default list for the next backtest.",
-        key="home_custom_symbols",
-    )
-    st.session_state["custom_symbols_raw"] = custom_symbols_raw
-    st.caption("Changes here will appear in the sidebar the next time you open Backtest.")
-    live_symbols = preview_equities(load_default_config())
-    st.markdown(
-        f"<div class='theme-note'>"
-        f"Live symbol preview: {', '.join(live_symbols) if live_symbols else 'No symbols selected yet.'}"
-        f"</div>",
-        unsafe_allow_html=True,
-    )
+    st.subheader("Tracked Universe")
+    live_symbols = tracked_universe_symbols(load_default_config())
+    grouped_universe = grouped_tracked_universe(load_default_config())
+    if grouped_universe:
+        u1, u2 = st.columns(2)
+        group_items = list(grouped_universe.items())
+        for idx, (group_name, symbols) in enumerate(group_items):
+            with (u1 if idx % 2 == 0 else u2):
+                st.markdown(f"**{_display_asset_class(group_name)}**")
+                st.write(", ".join(symbols))
+
+        total_symbols = sum(len(symbols) for symbols in grouped_universe.values())
+        st.caption(
+            f"PulseTrader tracks {total_symbols} instruments across equities, indices, forex, and gold. "
+            "Normal runs use this fixed universe; only the pre-session selector decides which symbols are traded in the session."
+        )
+    else:
+        st.caption("No tracked universe configured yet.")
+
+    st.caption("Use Research Overrides in the Backtest sidebar only when testing custom subsets.")
     st.markdown(
         "<div class='theme-note theme-note--small'>"
         "Weekly results are directional and informational. They are not final conclusions, but a way to monitor how the strategy is behaving over time."
@@ -857,7 +1095,33 @@ def render_home():
             latest_cfg = yaml.safe_load(latest_cfg_path.read_text())
             custom_symbols = latest_cfg.get("instruments", {}).get("custom_symbols", [])
             if custom_symbols:
-                st.caption(f"Custom symbols used: {', '.join(custom_symbols)}")
+                st.caption(f"Custom symbols added to universe: {', '.join(custom_symbols)}")
+
+            pre_cfg = latest_cfg.get("pre_session", {}) or {}
+            selection_snapshot = load_selection_snapshot(latest_run["run_dir"])
+            if pre_cfg.get("enabled", False):
+                st.markdown("**Pre-Session Selection**")
+                ps1, ps2, ps3, ps4 = st.columns(4)
+                selected_symbols = (selection_snapshot or {}).get("selected_symbols", [])
+                evaluated = (selection_snapshot or {}).get("evaluated", [])
+                excluded_count = max(0, len(evaluated) - len(selected_symbols))
+                ps1.metric("Selector", "Enabled")
+                ps2.metric("Top-N", int(pre_cfg.get("top_n", 3)))
+                ps3.metric("Selected", len(selected_symbols))
+                ps4.metric("Excluded", excluded_count)
+
+                if selected_symbols:
+                    st.caption(f"Session symbols: {', '.join(selected_symbols)}")
+                else:
+                    st.caption("No selection snapshot found for this run.")
+
+                rules = (selection_snapshot or {}).get("rules", {})
+                if rules:
+                    st.caption(
+                        "Policies: "
+                        f"PF missing={rules.get('pf_missing_policy', 'allow')}, "
+                        f"Spread missing={rules.get('spread_missing_policy', 'allow')}"
+                    )
 
     weekly_rows = long_view.get("recent", [])
     charts_tab, history_tab, summary_tab = st.tabs(["Weekly Charts", "Weekly History", "Weekly Summary"])
@@ -1019,11 +1283,24 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
     ]
 
     if not all_trades:
+        reason_counts = {}
+        for summaries in result.session_summaries.values():
+            for summary in summaries:
+                for reason in summary.rejection_reasons:
+                    reason_counts[reason] = reason_counts.get(reason, 0) + 1
+
         st.warning(
             "The backtest completed but produced no trades.  "
-            "Check the date range, instrument selection, and data availability. "
+            "Check date range, pre-session selection, filters, and data availability. "
             "Validation warnings (if any) are shown below."
         )
+
+        if reason_counts:
+            sorted_reasons = sorted(reason_counts.items(), key=lambda item: item[1], reverse=True)
+            st.info("Most common no-trade reasons in this run:")
+            for reason, count in sorted_reasons[:5]:
+                st.write(f"- {reason}: {count}")
+
         for w in result.validation_warnings:
             st.warning(w)
         return
@@ -1232,6 +1509,37 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
             key="download_exec_log",
         )
 
+    selection_json = recorder.directory / "selection_snapshot.json"
+    selection_csv = recorder.directory / "selection_snapshot.csv"
+    selection_report = recorder.directory / "selection_report.txt"
+    if selection_json.exists() or selection_csv.exists() or selection_report.exists():
+        st.subheader("Pre-Session Artifacts")
+        s1, s2, s3 = st.columns(3)
+        if selection_json.exists():
+            s1.download_button(
+                "Selection Snapshot (JSON)",
+                data=selection_json.read_bytes(),
+                file_name="selection_snapshot.json",
+                mime="application/json",
+                key="download_selection_json",
+            )
+        if selection_csv.exists():
+            s2.download_button(
+                "Selection Snapshot (CSV)",
+                data=selection_csv.read_bytes(),
+                file_name="selection_snapshot.csv",
+                mime="text/csv",
+                key="download_selection_csv",
+            )
+        if selection_report.exists():
+            s3.download_button(
+                "Selection Report (TXT)",
+                data=selection_report.read_bytes(),
+                file_name="selection_report.txt",
+                mime="text/plain",
+                key="download_selection_report",
+            )
+
     st.caption(f"Results saved to: `{recorder.directory}`")
 
 
@@ -1242,7 +1550,7 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
 def main():
     st.sidebar.markdown("### Automation")
     st.sidebar.caption(
-        "Background updates run every 15 minutes during 09:30–11:30 ET through the scheduled task."
+        "Background updates run every 15 minutes during 09:25–11:00 ET through the scheduled task."
     )
     auto_refresh_enabled = st.sidebar.checkbox(
         "Auto-refresh page",
@@ -1253,18 +1561,37 @@ def main():
         enable_dashboard_auto_refresh(15)
     st.sidebar.caption("Use `Run Backtest` below if you want an immediate update right now.")
 
-    pulse_tab, backtest_tab, guide_tab = st.tabs(
-        ["🏠 PulseTrader", "📊 Backtest", "📘 How it works"]
-    )
+    page_labels = {
+        "pulse": "🏠 PulseTrader",
+        "backtest": "📊 Backtest",
+        "guide": "📘 How it works",
+    }
+    page_keys = list(page_labels.keys())
+    query_page = st.query_params.get("page", "pulse")
+    if isinstance(query_page, list):
+        query_page = query_page[0]
+    if query_page not in page_labels:
+        query_page = "pulse"
 
-    with pulse_tab:
+    selected_label = st.radio(
+        "Page",
+        options=[page_labels[k] for k in page_keys],
+        index=page_keys.index(query_page),
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+    selected_page = next(k for k, v in page_labels.items() if v == selected_label)
+    if st.query_params.get("page") != selected_page:
+        st.query_params["page"] = selected_page
+
+    if selected_page == "pulse":
         render_home()
 
-    with backtest_tab:
+    elif selected_page == "backtest":
         st.title("PulseTrader Backtester")
         st.caption(
-            "A mechanical opening-range breakout strategy with ATR manipulation "
-            "filter, slingshot retest confirmation, and automated risk management."
+            "A selection-driven opening-range strategy with pre-session Top-N ranking, "
+            "retest/gap trend entries, and automated risk management."
         )
         st.caption("Weekly results are monitoring signals, not final conclusions.")
 
@@ -1276,7 +1603,7 @@ def main():
 
         if run_button:
             if not cfg["instruments"]["equities"] and not cfg["instruments"].get("forex_csv_files"):
-                st.error("Please select at least one instrument before running.")
+                st.error("Please configure at least one symbol in the master universe before running.")
                 return
 
             if start_date >= end_date:
@@ -1338,6 +1665,7 @@ def main():
                 """
                 <div class="soft-panel">
                     <strong>Start here.</strong> Configure your parameters in the sidebar and press <strong>Run Backtest</strong> to begin.<br><br>
+                    <strong>Selection model:</strong> The tracked universe defines the full instrument pool. If pre-session selection is enabled, only the session Top-N selection is traded for that run.<br><br>
                     <strong>Data sources:</strong> Equities are fetched automatically from Yahoo Finance. For Forex instruments, place OHLCV CSV files in <code>data_files/</code> and add them to <code>config/settings.yaml</code>.
                 </div>
                 """,
@@ -1352,7 +1680,7 @@ def main():
                 last_run["exec_log_path"],
             )
 
-    with guide_tab:
+    else:
         render_how_it_works()
 
 

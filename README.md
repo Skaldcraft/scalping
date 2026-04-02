@@ -1,9 +1,9 @@
 # Precision Scalping Utility
 
-A mechanical backtesting engine for opening-range breakout scalping strategies.
+A mechanical backtesting engine for opening-range scalping strategies.
 Removes emotion and guesswork from the evaluation process by implementing a fully
-objective, rule-based simulation of intraday price action during the first 90–120
-minutes of the New York session.
+objective, rule-based simulation of intraday price action during the first 90 minutes
+of the New York session, driven by a fixed tracked universe and a pre-session Top-N selector.
 
 ---
 
@@ -26,7 +26,8 @@ frameworks (Casper SMC, ProRealAlgos, Jdub Trades) and produces:
 ## Strategy Logic Summary
 
 ```
-Phase 0 (pre-session):   Compute 14-day ATR, check previous day H/L for bias
+Phase 0 (pre-session):   Rank the tracked universe before the open
+                         Compute 14-day ATR and apply selector filters
 Phase 1 (opening range): Mark H/L/midpoint of first N-minute candle
                          Compare range to 25% of ATR
 
@@ -36,7 +37,7 @@ If range >= 25% ATR  →  MANIPULATION MODE
 
 If range < 25% ATR   →  BREAKOUT MODE
   Wait for full-body candle close outside the range
-  Wait for valid retest (wick touches boundary, close stays outside)
+  Wait for valid retest or qualified displacement gap
   Enter on open of next candle
 
 If breakout fails    →  MEAN REVERSION MODE
@@ -45,7 +46,7 @@ If breakout fails    →  MEAN REVERSION MODE
 All modes:
   Stop-Loss  : OR midpoint (Fibonacci 0.5 level)
   Take-Profit: 2:1 and 3:1 tracked concurrently
-  Session gate: no new entries after 90–120 min (configurable)
+  Session gate: no new entries after 11:00 ET
 ```
 
 ---
@@ -130,16 +131,18 @@ risk:
   min_trades_before_pf_check: 10
 ```
 
-### Sample Configs
+### Tracked Universe and Selection
 
-- `config/settings_equities_sample.yaml` - single-symbol equities test using `AAPL`
-- `python main.py --start 2026-03-20 --end 2026-03-27 --config config/settings_equities_sample.yaml`
-- `config/settings_equities_qqq_sample.yaml` - single-symbol equities test using `QQQ`
-- `python main.py --start 2026-03-20 --end 2026-03-27 --config config/settings_equities_qqq_sample.yaml`
-- `config/settings_equities_multi_sample.yaml` - default multi-symbol equities test
-- `python main.py --start 2026-03-20 --end 2026-03-27 --config config/settings_equities_multi_sample.yaml`
-- `config/settings_forex_sample.yaml` - Forex test wired to `EURUSD_5min_full_day_sample.csv`
-- `python main.py --start 2026-03-20 --end 2026-03-27 --config config/settings_forex_sample.yaml`
+The default configuration now uses a fixed tracked universe under `pre_session.universe`.
+That universe includes equities, indices, Yahoo-compatible forex symbols, and gold.
+
+Normal production flow:
+
+1. PulseTrader loads the fixed tracked universe.
+2. The pre-session selector ranks that universe.
+3. The Top-N session selection is used for the run.
+
+Research-only alternatives still exist if you want to test a custom subset, but that is no longer the primary workflow.
 
 ### Daily Automation
 
@@ -174,7 +177,7 @@ Recommended schedule:
 If you need to target a specific date:
 
 ```bash
-python daily_run.py --date 2026-03-20 --config config/settings_equities_multi_sample.yaml
+python daily_run.py --date 2026-03-20 --config config/settings.yaml
 ```
 
 ### Intraday 15-Minute Automation (Windows)
@@ -188,8 +191,9 @@ powershell.exe -ExecutionPolicy Bypass -File register_intraday_task.ps1
 What this does:
 - creates a Windows scheduled task named `PulseTrader Intraday 15m`
 - triggers every `15` minutes
-- only performs the real run during `09:30` to `11:30` **New York time**
+- only performs the real run during `09:25` to `11:00` **New York time**
 - uses `run_intraday.ps1`, which calls `daily_run.py` for the current ET date
+- reuses the frozen daily selection for the date when pre-session selection is enabled
 
 Useful commands:
 
@@ -242,10 +246,18 @@ What it creates:
 
 ---
 
-## Adding Forex Data
+## Alternate Forex / CSV Data
 
-yfinance does not reliably provide intraday Forex data. To backtest
-Forex pairs:
+The default tracked universe already includes Yahoo-compatible forex and gold symbols.
+If you want to backtest an alternate dataset, you can still provide your own CSV files.
+
+Use CSV data when:
+
+- you want to compare Yahoo-compatible feeds against your own history
+- you want tighter control over the forex dataset
+- you want to test symbols not covered by the default tracked universe
+
+To backtest from CSV:
 
 1. Obtain OHLCV CSV files from a provider (e.g. Dukascopy, TrueFX, Forex Tester).
 2. Place the files in the `data_files/` directory.
@@ -371,11 +383,11 @@ scalping_utility/
 ## Recommended First Run
 
 ```bash
-# Verify installation with a short date range on a single liquid instrument
+# Verify installation with a short date range using the default tracked universe
 python main.py --start 2024-10-01 --end 2024-12-31
 ```
 
-This tests roughly 65 sessions on the default instrument list and should
+This tests roughly 65 sessions on the tracked universe with the current selector workflow and should
 complete in under two minutes. Then open the dashboard to explore the results:
 
 ```bash
@@ -388,11 +400,10 @@ python -m streamlit run dashboard/app.py
 
 | Source | Interval | Max History |
 |---|---|---|
-| yfinance (equities) | 1m | ~30 calendar days |
-| yfinance (equities) | 5m | ~60 days per request (chunked automatically) |
-| yfinance (equities) | 15m | ~60 days per request |
-| yfinance (indices: QQQ, SPY) | 5m / 15m | Same as equities |
-| User CSV (Forex) | Any | Unlimited — depends on your data file |
+| yfinance (tracked equities / indices / Yahoo symbols) | 1m | ~30 calendar days |
+| yfinance (tracked equities / indices / Yahoo symbols) | 5m | ~60 days per request (chunked automatically) |
+| yfinance (tracked equities / indices / Yahoo symbols) | 15m | ~60 days per request |
+| User CSV (alternate Forex / custom feed) | Any | Unlimited — depends on your data file |
 
 For backtests longer than 60 days on equity instruments, the fetcher
 automatically splits the request into 58-day chunks and reassembles the data.
@@ -426,7 +437,7 @@ Both events are recorded in `execution_log.json` and summarised in `run_report.t
 | Profit Factor | ≥ 1.5 |
 | Risk per trade | 1% of equity |
 | Max daily loss | 5% of equity |
-| Session window | First 90–120 minutes |
+| Session window | 09:30–11:00 ET |
 
 The run report flags any metric that falls below these benchmarks and
 suggests specific parameter adjustments.

@@ -77,9 +77,23 @@ pre_session:
   # Default: results/_selection_state
   frozen_selection_dir: null
   fallback_to_config_instruments: true
-  # If empty, the selector defaults to instruments.equities.
-  # You can also provide objects: {symbol: "AAPL", asset_class: "equity"}
-  universe: []
+  # Fixed tracked universe used by the pre-session selector.
+  # Symbols are Yahoo-compatible so the selector/backtester can fetch them directly.
+  universe:
+    - {symbol: "META", asset_class: "equity"}
+    - {symbol: "AMZN", asset_class: "equity"}
+    - {symbol: "AAPL", asset_class: "equity"}
+    - {symbol: "NFLX", asset_class: "equity"}
+    - {symbol: "GOOGL", asset_class: "equity"}
+    - {symbol: "NVDA", asset_class: "equity"}
+    - {symbol: "TSLA", asset_class: "equity"}
+    - {symbol: "MSFT", asset_class: "equity"}
+    - {symbol: "QQQ", asset_class: "index"}
+    - {symbol: "SPY", asset_class: "index"}
+    - {symbol: "EURUSD=X", asset_class: "forex"}
+    - {symbol: "GBPUSD=X", asset_class: "forex"}
+    - {symbol: "JPY=X", asset_class: "forex"}
+    - {symbol: "XAUUSD=X", asset_class: "metal"}
   selection_rules:
     min_profit_factor: 1.5
     min_trades_for_pf: 10
@@ -90,9 +104,27 @@ pre_session:
     # - reject: exclude symbol when data is missing
     pf_missing_policy: allow
     spread_missing_policy: allow
+    # Optional spread cap used by the selector. If null, spread is not capped.
+    max_spread: null
+
+    # Forex reliability policy (recommended production baseline)
+    # ---------------------------------------------------------
+    # If you want Forex symbols to remain in the tracked universe only when
+    # data quality is strong, use:
+    #   spread_missing_policy: reject
+    #   max_spread: <pair-specific threshold>
+    #   spread_overrides: {EURUSD=X: ..., GBPUSD=X: ..., JPY=X: ...}
+    #
+    # If you want broad inclusion while experimenting, keep:
+    #   spread_missing_policy: allow
+    #   max_spread: null
+    #
+    # In short:
+    # - strict profile  -> Forex filtered unless spread data is reliable
+    # - permissive profile -> Forex can stay included while data is incomplete
+
     # Legacy toggles (still supported for compatibility):
     require_pf_history: false
-    max_spread: null
     require_spread_data: false
   # Optional manual spread map used by Phase 1 selector.
   # Example: {AAPL: 0.02, NVDA: 0.03}

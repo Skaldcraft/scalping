@@ -75,7 +75,8 @@ class JournalRecorder:
         if not rows:
             log.warning("No trades to record in trade log.")
             path = self.run_dir / "trade_log.csv"
-            pd.DataFrame().to_csv(path, index=False)
+            trade_columns = list(TradeResult.__dataclass_fields__.keys())
+            pd.DataFrame(columns=trade_columns).to_csv(path, index=False)
             return path
 
         df   = pd.DataFrame(rows)

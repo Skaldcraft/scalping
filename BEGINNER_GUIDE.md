@@ -2,6 +2,29 @@
 
 A practical guide for people who are new to trading and want to understand **what scalping is**, **what this utility does**, and **how to use it safely and clearly**.
 
+## Table of contents
+
+- [1) What is this tool?](#1-what-is-this-tool)
+- [2) What is scalping?](#2-what-is-scalping)
+- [3) What this utility studies](#3-what-this-utility-studies)
+- [4) What the tracked universe means](#4-what-the-tracked-universe-means)
+- [5) How the strategy works in plain language](#5-how-the-strategy-works-in-plain-language)
+- [6) What kind of data it uses](#6-what-kind-of-data-it-uses)
+- [7) How real data works now](#7-how-real-data-works-now)
+- [8) The easiest way to use the tool: the dashboard](#8-the-easiest-way-to-use-the-tool-the-dashboard)
+- [9) Command-line usage](#9-command-line-usage)
+- [10) Daily and weekly automation](#10-daily-and-weekly-automation)
+- [11) Understanding the results](#11-understanding-the-results)
+- [12) Key metrics explained simply](#12-key-metrics-explained-simply)
+- [13) Risk controls built into the tool](#13-risk-controls-built-into-the-tool)
+- [14) What the tool does well](#14-what-the-tool-does-well)
+- [15) What the tool does not do](#15-what-the-tool-does-not-do)
+- [16) Best practices for beginners](#16-best-practices-for-beginners)
+- [17) Example beginner workflow](#17-example-beginner-workflow)
+- [18) Troubleshooting basics](#18-troubleshooting-basics)
+- [19) Glossary of terms](#19-glossary-of-terms)
+- [20) Final reminder](#20-final-reminder)
+
 ---
 
 ## 1) What is this tool?
@@ -57,17 +80,59 @@ This makes the process more **mechanical** and less emotional.
 
 ---
 
-## 4) How the strategy works in plain language
+## 4) What the tracked universe means
+
+PulseTrader now works with a **tracked universe**.
+
+This means the tool starts from a **fixed pool of instruments** that it monitors regularly, instead of expecting you to define a brand-new symbol list every time you run it.
+
+In simple terms:
+
+- the **tracked universe** is the full pool PulseTrader watches
+- the **pre-session selector** ranks that pool before the New York session
+- the tool then trades only the **Top-N session selection** for that run when selection is enabled
+
+So there are two different ideas:
+
+- **Tracked universe** = everything PulseTrader is allowed to consider
+- **Session selection** = the smaller set chosen for the current day
+
+This is useful because it keeps the process consistent and makes daily selection more objective.
+
+### Why the universe is split into categories
+
+The tracked universe is grouped by market type because these instruments do not behave exactly the same way:
+
+| Category | What it includes | Why it matters |
+|---|---|---|
+| **Equities** | Individual companies such as `AAPL`, `NVDA`, `MSFT` | Single stocks can move sharply on company-specific momentum and often fit reversal logic well. |
+| **Indices** | Market-tracking instruments such as `QQQ`, `SPY` | Indices often behave more smoothly and are useful for trend-style continuation logic. |
+| **Forex** | Currency pairs such as `EUR/USD`, `GBP/USD`, `USD/JPY` | Forex trades nearly continuously and can react differently to session overlap, liquidity, and macro news. |
+| **Gold / Metals** | Gold instruments such as `XAU/USD` | Gold often responds to risk sentiment, inflation expectations, and macro flows differently from stocks or currencies. |
+
+The distinction matters because a strategy can behave differently on:
+
+- a single stock
+- a broad index
+- a currency pair
+- a metal like gold
+
+That is one reason PulseTrader separates the **tracked universe** from the **session selection** and keeps detailed performance records.
+
+---
+
+## 5) How the strategy works in plain language
 
 The utility follows a fixed sequence.
 
 ### Step 1 — It defines the session
 The tool looks at a time window such as:
 
+- **Pre-session selector:** `09:25` New York time
 - **Start:** `09:30` New York time
 - **End:** `11:00` New York time
 
-This is the period in which new trades are allowed.
+The selector can rank the tracked universe before the session opens. New trades are then only allowed during the active session window.
 
 ### Step 2 — It marks the opening range
 It uses the first **5-minute** or **15-minute** candle to define:
@@ -119,11 +184,11 @@ After the run, the utility saves:
 
 ---
 
-## 5) What kind of data it uses
+## 6) What kind of data it uses
 
 The utility can work with two main data paths:
 
-### A) Equities / ETFs / indices
+### A) Equities / ETFs / indices / tracked Yahoo symbols
 Examples:
 
 - `AAPL`
@@ -132,12 +197,22 @@ Examples:
 - `QQQ`
 - `SPY`
 
+The tracked universe can also include Yahoo-compatible symbols for other asset types, including Forex and Gold.
+
 These are fetched automatically through **Yahoo Finance** when you run a backtest.
 
 ### B) Forex
-For Forex, the utility expects you to provide your own **CSV files** in `data_files/`.
+Forex can be used in **two ways** in the current setup:
 
-Example section in `config/settings.yaml`:
+1. **Tracked-universe Yahoo-compatible symbols (default flow)**
+   - Example symbols in the tracked universe: `EURUSD=X`, `GBPUSD=X`, `JPY=X`
+   - These are evaluated by the same pre-session selector and Top-N process as other tracked instruments.
+
+2. **Local CSV override path (optional)**
+   - Use this when you want tighter control over your Forex feed quality or want to compare providers.
+   - Place files in `data_files/` and map them in config.
+
+Example CSV mapping in `config/settings.yaml`:
 
 ```yaml
 instruments:
@@ -145,57 +220,65 @@ instruments:
     EURUSD: "data_files/EURUSD_5min.csv"
 ```
 
----
+When CSV is usually preferable:
 
-## 6) How to activate and use real data
+- you need a fixed historical dataset for reproducible tests
+- you want to control data quality and timestamps explicitly
+- you want to test symbols/timeframes not covered by your default tracked feed
 
-For **equities**, real historical data is already connected.
-You do **not** need to write special API code.
+Practical note on reliability:
 
-You just need at least one symbol listed in `config/settings.yaml`:
-
-```yaml
-instruments:
-  equities:
-    - AAPL
-    - NVDA
-    - AMZN
-    - QQQ
-    - SPY
-```
-
-Then run:
-
-```powershell
-python main.py --start 2026-03-20 --end 2026-03-27 --config config/settings.yaml
-```
-
-That command will use **all symbols in the config**.
-
-### One symbol example
-```powershell
-python main.py --start 2026-03-20 --end 2026-03-27 --config config/settings_equities_sample.yaml
-```
-
-### Three-symbol example
-If your config contains `AAPL`, `NVDA`, and `QQQ`, run:
-
-```powershell
-python main.py --start 2026-03-20 --end 2026-03-27 --config config/settings.yaml
-```
-
-### All-symbol example
-If your config contains five or more symbols, the same command runs them all:
-
-```powershell
-python main.py --start 2026-03-20 --end 2026-03-27 --config config/settings.yaml
-```
-
-> The difference is not the command itself — it is the list of symbols inside the config file.
+- Forex is kept in the automated tracked universe, but spread/data-quality controls can be stricter than equities.
+- If needed, use selector rules to enforce stricter inclusion (for example spread missing policy = reject, plus spread thresholds).
 
 ---
 
-## 7) The easiest way to use the tool: the dashboard
+## 7) How real data works now
+
+PulseTrader now uses a **tracked-universe-first** workflow.
+
+That means:
+
+- the fixed tracked universe is defined in `config/settings.yaml`
+- the pre-session selector reviews that universe before the session opens
+- the selector chooses the **Top-N session selection**
+- the strategy then trades only that smaller session list when selection is enabled
+
+So in the current setup, “using real data” usually does **not** mean manually picking symbols one by one.
+It means making sure the tracked universe is configured and letting the selector do the daily filtering.
+
+### What is already connected
+
+The current tracked universe includes Yahoo-compatible symbols for:
+
+- equities
+- indices
+- Forex
+- gold
+
+That means historical market data can be fetched automatically for the default tracked universe without writing extra API code.
+
+### What still needs attention
+
+Some selector inputs are still optional or partially manual, depending on what you want to test:
+
+- **Profit Factor history** comes from prior saved trade results
+- **Spread data** can be supplied through manual overrides if needed
+- **Research Overrides** in the dashboard are only for testing custom subsets, not the normal production workflow
+
+### When CSV files still matter
+
+CSV files are still useful if:
+
+- you want to test an alternate Forex dataset
+- you want to compare Yahoo-compatible symbols against your own imported data
+- you want tighter control over the exact historical feed being used
+
+So CSV-based Forex is still supported, but it is no longer the only way the tool can work with non-equity instruments.
+
+---
+
+## 8) The easiest way to use the tool: the dashboard
 
 The beginner-friendly way to use the project is the **Streamlit dashboard**.
 
@@ -209,24 +292,26 @@ Then open the local browser page shown by Streamlit.
 ### What you can do in the dashboard
 
 - choose a **date range**
-- select one or more **symbols**
+- review the **tracked universe**
+- adjust **pre-session selection controls**
 - pick the **opening-range candle size**
+- adjust **trend-mode controls**
 - adjust **risk settings**
 - click **Run Backtest**
-- review charts, tables, and downloadable files
+- review charts, tables, no-trade reasons, and downloadable files
 
 ### Typical beginner workflow
 
 1. Open the dashboard.
 2. Choose a recent date range.
-3. Select one symbol first, such as `AAPL`.
+3. Confirm the tracked universe and Top-N selection settings.
 4. Run the backtest.
-5. Review the results.
-6. Then try multiple symbols together.
+5. Review the latest run, session selection, and results.
+6. Use Research Overrides only if you want to test a custom subset.
 
 ---
 
-## 8) Command-line usage
+## 9) Command-line usage
 
 If you prefer the terminal, you can run the tool directly.
 
@@ -251,7 +336,7 @@ python main.py --start 2026-03-20 --end 2026-03-27 --config config/settings.yaml
 
 ---
 
-## 9) Daily and weekly automation
+## 10) Daily and weekly automation
 
 The project also includes automation helpers.
 
@@ -276,7 +361,7 @@ These are useful when you want to build a regular review habit.
 
 ---
 
-## 10) Understanding the results
+## 11) Understanding the results
 
 Each run creates a folder inside `results/`.
 
@@ -299,7 +384,7 @@ Inside that folder you may see:
 
 ---
 
-## 11) Key metrics explained simply
+## 12) Key metrics explained simply
 
 Here are the main numbers you will see.
 
@@ -333,7 +418,7 @@ For beginners, it can be treated as a rough “quality of returns” number.
 
 ---
 
-## 12) Risk controls built into the tool
+## 13) Risk controls built into the tool
 
 The utility is not only looking for entries. It also contains controls intended to limit overtrading and poor conditions.
 
@@ -348,7 +433,7 @@ This encourages more disciplined testing.
 
 ---
 
-## 13) What the tool does well
+## 14) What the tool does well
 
 ### Strengths
 - gives a **consistent, rule-based review**
@@ -365,7 +450,7 @@ This encourages more disciplined testing.
 
 ---
 
-## 14) What the tool does **not** do
+## 15) What the tool does **not** do
 
 It is important to be realistic.
 
@@ -381,7 +466,7 @@ Backtesting is a way to **study behavior**, not a promise of future performance.
 
 ---
 
-## 15) Best practices for beginners
+## 16) Best practices for beginners
 
 If you are new to trading, this is a good approach:
 
@@ -395,28 +480,35 @@ If you are new to trading, this is a good approach:
 
 ---
 
-## 16) Example beginner workflow
+## 17) Example beginner workflow
 
-### First session
-- Run the dashboard.
-- Select `AAPL`.
-- Use a 1–2 week date range.
-- Run the test.
-- Read the metrics and the report.
+### Path A (recommended): tracked-universe workflow
 
-### Second session
-- Add `NVDA` and `QQQ`.
-- Compare whether the same rules behave similarly.
-- Review which symbol had better stability.
+1. Open the dashboard.
+2. Keep the default **tracked universe** and pre-session selector enabled.
+3. Use a short date range (for example 1-2 weeks).
+4. Run the backtest.
+5. Review:
+  - session Top-N selection
+  - no-trade reasons (if any)
+  - per-instrument performance
+6. Repeat with a different date range before changing strategy settings.
 
-### Third session
-- Run all configured symbols.
-- Check the per-instrument table.
-- Compare win rate, net P&L, and drawdown.
+### Path B (optional didactic mode): research overrides
+
+Use this only when you want to isolate behavior for learning.
+
+1. Open **Research Overrides** in the Backtest sidebar.
+2. Enable override for this run.
+3. Test a small subset (for example 1-2 symbols) over a short range.
+4. Compare mode behavior and stability between symbols.
+5. Disable override and return to Path A for normal workflow.
+
+This gives you educational clarity without replacing the default selector-driven process.
 
 ---
 
-## 17) Troubleshooting basics
+## 18) Troubleshooting basics
 
 ### “No trades were produced”
 Possible reasons:
@@ -438,7 +530,7 @@ That usually means the test range is very short, which may not be enough to judg
 
 ---
 
-## 18) Glossary of terms
+## 19) Glossary of terms
 
 | Term | Plain-language meaning |
 |---|---|
@@ -477,7 +569,7 @@ That usually means the test range is very short, which may not be enough to judg
 
 ---
 
-## 19) Final reminder
+## 20) Final reminder
 
 This utility is best used as a **learning and analysis assistant**.
 
