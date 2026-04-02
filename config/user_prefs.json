@@ -1,0 +1,22 @@
+{
+  "start_date": "2026-03-31",
+  "end_date": "2026-04-02",
+  "pre_session_enabled": true,
+  "selector_top_n": 4,
+  "freeze_daily": true,
+  "pf_missing_policy": "allow",
+  "spread_missing_policy": "allow",
+  "pf_lookback_trades_raw": 0,
+  "legacy_require_pf": false,
+  "legacy_require_spread": false,
+  "or_minutes": 15,
+  "manip_threshold": 25,
+  "allow_gap_entry": true,
+  "entry_priority": "retest_first",
+  "displacement_min_atr_pct": 3.0,
+  "displacement_min_body_pct": 60.0,
+  "starting_capital": 10000,
+  "risk_pct": 1.0,
+  "daily_loss_pct": 5.0,
+  "commission": 0.5
+}

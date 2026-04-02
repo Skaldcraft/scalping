@@ -208,6 +208,28 @@ def delete_items_permanently(results_dir: Path, item_ids: list[str]) -> tuple[in
     return deleted, skipped, reclaimed_bytes
 
 
+def delete_active_items(results_dir: Path, item_ids: list[str]) -> tuple[int, list[str], int]:
+    """Permanently delete active (non-trash) result folders."""
+    deleted = 0
+    skipped: list[str] = []
+    reclaimed_bytes = 0
+
+    for item_id in item_ids:
+        target = results_dir / item_id
+        if not target.exists() or not target.is_dir() or target.name.startswith("_"):
+            skipped.append(item_id)
+            continue
+
+        try:
+            reclaimed_bytes += _folder_size_bytes(target)
+            shutil.rmtree(target)
+            deleted += 1
+        except Exception:
+            skipped.append(item_id)
+
+    return deleted, skipped, reclaimed_bytes
+
+
 def summarize(active_records: list[dict], trash_records: list[dict]) -> dict:
     active_size = sum(r.get("size_bytes", 0) for r in active_records)
     trash_size = sum(r.get("size_bytes", 0) for r in trash_records)

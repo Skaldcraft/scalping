@@ -184,12 +184,34 @@ st.set_page_config(
 # ---------------------------------------------------------------------------
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "settings.yaml"
+USER_PREFS_PATH = Path(__file__).resolve().parent.parent / "config" / "user_prefs.json"
 GUIDE_PATH = Path(__file__).resolve().parent.parent / "BEGINNER_GUIDE.md"
 
 @st.cache_resource
 def load_default_config():
     with open(CONFIG_PATH, "r") as f:
         return yaml.safe_load(f)
+
+
+def load_user_prefs() -> dict:
+    """Load persisted sidebar settings from user_prefs.json."""
+    if USER_PREFS_PATH.exists():
+        try:
+            return json.loads(USER_PREFS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+
+def save_user_prefs(prefs: dict) -> None:
+    """Persist sidebar settings to user_prefs.json."""
+    try:
+        USER_PREFS_PATH.write_text(
+            json.dumps(prefs, indent=2, default=str),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
 
 @st.cache_data
 def load_beginner_guide() -> str:
@@ -224,15 +246,27 @@ def enable_dashboard_auto_refresh(interval_minutes: int = 15):
 def build_sidebar(default_cfg: dict) -> tuple[dict, date, date]:
     st.sidebar.title("Backtest Controls")
 
+    _prefs = load_user_prefs()
+
     st.sidebar.subheader("Date Range")
+    _default_start = (
+        date.fromisoformat(_prefs["start_date"])
+        if "start_date" in _prefs
+        else date.today() - timedelta(days=90)
+    )
+    _default_end = (
+        date.fromisoformat(_prefs["end_date"])
+        if "end_date" in _prefs
+        else date.today() - timedelta(days=1)
+    )
     start_date = st.sidebar.date_input(
         "Start Date",
-        value=date.today() - timedelta(days=90),
+        value=_default_start,
         max_value=date.today() - timedelta(days=2),
     )
     end_date = st.sidebar.date_input(
         "End Date",
-        value=date.today() - timedelta(days=1),
+        value=_default_end,
         max_value=date.today(),
     )
 
@@ -244,32 +278,32 @@ def build_sidebar(default_cfg: dict) -> tuple[dict, date, date]:
 
     pre_session_enabled = st.sidebar.checkbox(
         "Enable Pre-Session Top-N Selector",
-        value=bool(pre_cfg.get("enabled", False)),
+        value=bool(_prefs.get("pre_session_enabled", pre_cfg.get("enabled", False))),
         help="When enabled, the run trades only the session selection (Top-N) instead of the full master universe list.",
     )
     selector_top_n = st.sidebar.number_input(
         "Top-N Symbols",
         min_value=1,
         max_value=10,
-        value=int(pre_cfg.get("top_n", 3)),
+        value=int(_prefs.get("selector_top_n", pre_cfg.get("top_n", 3))),
         step=1,
     )
     freeze_daily = st.sidebar.checkbox(
         "Freeze Daily Selection",
-        value=bool(pre_cfg.get("freeze_daily_selection", True)),
+        value=bool(_prefs.get("freeze_daily", pre_cfg.get("freeze_daily_selection", True))),
         help="Reuses the first computed selection for the same date on subsequent intraday runs.",
     )
 
     pf_missing_policy = st.sidebar.selectbox(
         "PF Missing Policy",
         options=["allow", "reject"],
-        index=["allow", "reject"].index(str(pre_rules.get("pf_missing_policy", "allow"))),
+        index=["allow", "reject"].index(str(_prefs.get("pf_missing_policy", pre_rules.get("pf_missing_policy", "allow")))),
         help="How to handle symbols with missing Profit Factor history.",
     )
     spread_missing_policy = st.sidebar.selectbox(
         "Spread Missing Policy",
         options=["allow", "reject"],
-        index=["allow", "reject"].index(str(pre_rules.get("spread_missing_policy", "allow"))),
+        index=["allow", "reject"].index(str(_prefs.get("spread_missing_policy", pre_rules.get("spread_missing_policy", "allow")))),
         help="How to handle symbols without spread data.",
     )
 
@@ -277,7 +311,7 @@ def build_sidebar(default_cfg: dict) -> tuple[dict, date, date]:
         "PF Lookback Trades (0 = all)",
         min_value=0,
         max_value=500,
-        value=int(pre_rules.get("pf_lookback_trades") or 0),
+        value=int(_prefs.get("pf_lookback_trades_raw", pre_rules.get("pf_lookback_trades") or 0)),
         step=5,
     )
     pf_lookback_trades = None if pf_lookback_trades_raw == 0 else int(pf_lookback_trades_raw)
@@ -285,11 +319,11 @@ def build_sidebar(default_cfg: dict) -> tuple[dict, date, date]:
     with st.sidebar.expander("Legacy Behavior", expanded=False):
         legacy_require_pf = st.checkbox(
             "Legacy toggle: require PF history",
-            value=bool(pre_rules.get("require_pf_history", False)),
+            value=bool(_prefs.get("legacy_require_pf", pre_rules.get("require_pf_history", False))),
         )
         legacy_require_spread = st.checkbox(
             "Legacy toggle: require spread data",
-            value=bool(pre_rules.get("require_spread_data", False)),
+            value=bool(_prefs.get("legacy_require_spread", pre_rules.get("require_spread_data", False))),
         )
 
     st.sidebar.markdown("**Tracked Universe**")
@@ -352,39 +386,39 @@ def build_sidebar(default_cfg: dict) -> tuple[dict, date, date]:
     or_minutes = st.sidebar.selectbox(
         "Opening Range Candle",
         options=[5, 15],
-        index=[5, 15].index(default_cfg["opening_range"]["candle_size_minutes"]),
+        index=[5, 15].index(int(_prefs.get("or_minutes", default_cfg["opening_range"]["candle_size_minutes"]))),
         format_func=lambda x: f"{x}-minute",
     )
 
     manip_threshold = st.sidebar.slider(
         "ATR Manipulation Threshold (%)",
         min_value=15, max_value=40,
-        value=int(default_cfg["strategy"]["manipulation_threshold_pct"]),
+        value=int(_prefs.get("manip_threshold", default_cfg["strategy"]["manipulation_threshold_pct"])),
         step=1,
     )
 
     trend_mode_cfg = (default_cfg.get("strategy", {}) or {}).get("trend_mode", {}) or {}
     allow_gap_entry = st.sidebar.checkbox(
         "Enable Displacement Gap Entries",
-        value=bool(trend_mode_cfg.get("allow_displacement_gap_entry", True)),
+        value=bool(_prefs.get("allow_gap_entry", trend_mode_cfg.get("allow_displacement_gap_entry", True))),
     )
     entry_priority = st.sidebar.selectbox(
         "Trend Entry Priority",
         options=["retest_first", "gap_first"],
-        index=["retest_first", "gap_first"].index(str(trend_mode_cfg.get("entry_priority", "retest_first"))),
+        index=["retest_first", "gap_first"].index(str(_prefs.get("entry_priority", trend_mode_cfg.get("entry_priority", "retest_first")))),
     )
     displacement_min_atr_pct = st.sidebar.slider(
         "Gap Min Size (% of ATR14)",
         min_value=0.0,
         max_value=15.0,
-        value=float(trend_mode_cfg.get("displacement_min_atr_pct", 3.0)),
+        value=float(_prefs.get("displacement_min_atr_pct", trend_mode_cfg.get("displacement_min_atr_pct", 3.0))),
         step=0.5,
     )
     displacement_min_body_pct = st.sidebar.slider(
         "Gap Bar Min Body (%)",
         min_value=0.0,
         max_value=100.0,
-        value=float(trend_mode_cfg.get("displacement_min_body_pct", 60.0)),
+        value=float(_prefs.get("displacement_min_body_pct", trend_mode_cfg.get("displacement_min_body_pct", 60.0))),
         step=5.0,
     )
 
@@ -395,25 +429,25 @@ def build_sidebar(default_cfg: dict) -> tuple[dict, date, date]:
     starting_capital = st.sidebar.number_input(
         "Starting Capital ($)",
         min_value=1000, max_value=1_000_000,
-        value=int(default_cfg["account"]["starting_capital"]),
+        value=int(_prefs.get("starting_capital", default_cfg["account"]["starting_capital"])),
         step=1000,
     )
     risk_pct = st.sidebar.slider(
         "Risk Per Trade (%)",
         min_value=0.25, max_value=3.0,
-        value=float(default_cfg["account"]["risk_per_trade_pct"]),
+        value=float(_prefs.get("risk_pct", default_cfg["account"]["risk_per_trade_pct"])),
         step=0.25,
     )
     daily_loss_pct = st.sidebar.slider(
         "Daily Loss Limit (%)",
         min_value=1.0, max_value=10.0,
-        value=float(default_cfg["account"]["daily_loss_limit_pct"]),
+        value=float(_prefs.get("daily_loss_pct", default_cfg["account"]["daily_loss_limit_pct"])),
         step=0.5,
     )
     commission = st.sidebar.number_input(
         "Commission Per Trade ($)",
         min_value=0.0, max_value=10.0,
-        value=float(default_cfg["commissions"]["per_trade_flat"]),
+        value=float(_prefs.get("commission", default_cfg["commissions"]["per_trade_flat"])),
         step=0.25,
     )
 
@@ -455,6 +489,29 @@ def build_sidebar(default_cfg: dict) -> tuple[dict, date, date]:
     else:
         cfg["instruments"]["equities"] = tracked_universe or default_equities
         cfg["instruments"]["custom_symbols"] = []
+
+    save_user_prefs({
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "pre_session_enabled": pre_session_enabled,
+        "selector_top_n": int(selector_top_n),
+        "freeze_daily": freeze_daily,
+        "pf_missing_policy": pf_missing_policy,
+        "spread_missing_policy": spread_missing_policy,
+        "pf_lookback_trades_raw": int(pf_lookback_trades_raw),
+        "legacy_require_pf": legacy_require_pf,
+        "legacy_require_spread": legacy_require_spread,
+        "or_minutes": int(or_minutes),
+        "manip_threshold": int(manip_threshold),
+        "allow_gap_entry": allow_gap_entry,
+        "entry_priority": entry_priority,
+        "displacement_min_atr_pct": float(displacement_min_atr_pct),
+        "displacement_min_body_pct": float(displacement_min_body_pct),
+        "starting_capital": int(starting_capital),
+        "risk_pct": float(risk_pct),
+        "daily_loss_pct": float(daily_loss_pct),
+        "commission": float(commission),
+    })
 
     return cfg, start_date, end_date
 
@@ -893,9 +950,12 @@ def build_weekly_equity_overview(results_dir: Path, symbols: list[str]) -> dict:
     tracked = [sym.upper() for sym in symbols if sym]
     symbol_series: dict[str, dict[str, dict]] = {sym: {} for sym in tracked}
     overall_series: dict[str, dict] = {}
+    latest_session_date = None
 
     trade_logs = sorted(results_dir.rglob("trade_log.csv")) if results_dir.exists() else []
     for trade_log in trade_logs:
+        if "_trash" in trade_log.parts:
+            continue
         try:
             trade_df = _safe_read_csv(trade_log)
         except Exception:
@@ -914,6 +974,9 @@ def build_weekly_equity_overview(results_dir: Path, symbols: list[str]) -> dict:
 
             if session_dt.date() < WEEKLY_HISTORY_START:
                 continue
+
+            if latest_session_date is None or session_dt.date() > latest_session_date:
+                latest_session_date = session_dt.date()
 
             week_start = session_dt.date() - timedelta(days=session_dt.date().weekday())
             week_key = week_start.isoformat()
@@ -963,7 +1026,11 @@ def build_weekly_equity_overview(results_dir: Path, symbols: list[str]) -> dict:
     for item in overall:
         item["win_rate"] = round((item["wins"] / item["trades"] * 100), 2) if item["trades"] else 0.0
 
-    return {"overall": overall, "by_symbol": by_symbol}
+    return {
+        "overall": overall,
+        "by_symbol": by_symbol,
+        "latest_session_date": latest_session_date.isoformat() if latest_session_date else None,
+    }
 
 
 def _sparkline_figure(points: list[dict], title: str):
@@ -1093,10 +1160,13 @@ def render_home():
     latest_run = load_latest_run_summary(RESULTS_PATH)
     latest_batch = load_latest_batch_summary(RESULTS_PATH)
     long_view = build_long_view(RESULTS_PATH, limit=8)
+    weekly_overview = build_weekly_equity_overview(RESULTS_PATH, live_symbols)
+    last_data_date = weekly_overview.get("latest_session_date") or "N/A"
 
-    c1, c2 = st.columns(2)
+    c1, c2, c3 = st.columns(3)
     c1.metric("Saved Weeks", len(long_view.get("recent", [])))
     c2.metric("Batch Report", "Available" if latest_batch else "None")
+    c3.metric("Last Data Date", last_data_date)
 
     if latest_run:
         st.subheader("Latest Run")
@@ -1174,6 +1244,40 @@ def render_home():
                     f"Weakest week: {weakest_week['week_start']} to {weakest_week['week_end']} (${weakest_week['net_pnl_2r']:,.2f})"
                 )
             st.caption(f"Recent view status: {classify_long_view_status(recent_weeks, review_cfg)}")
+        elif weekly_rows:
+            derived_rows = []
+            for row in weekly_rows:
+                week_key = str(row.get("week", ""))
+                week_start = ""
+                week_end = ""
+                try:
+                    year_str, week_str = week_key.split("-W")
+                    week_start_date = datetime.fromisocalendar(int(year_str), int(week_str), 1).date()
+                    week_end_date = week_start_date + timedelta(days=4)
+                    week_start = week_start_date.isoformat()
+                    week_end = week_end_date.isoformat()
+                except Exception:
+                    week_start = week_key
+
+                derived_rows.append(
+                    {
+                        "week_start": week_start,
+                        "week_end": week_end,
+                        "trades": int(row.get("trades", 0) or 0),
+                        "win_rate_2r": float(row.get("avg_win_rate", 0) or 0),
+                        "net_pnl_2r": float(row.get("net_pnl", 0) or 0),
+                    }
+                )
+
+            recent_weeks = derived_rows[:3]
+            avg_win = mean(x["win_rate_2r"] for x in recent_weeks) if recent_weeks else 0
+            total_pnl = sum(x["net_pnl_2r"] for x in recent_weeks) if recent_weeks else 0
+            b1, b2, b3 = st.columns(3)
+            b1.metric("Weeks", len(recent_weeks))
+            b2.metric("Avg Win Rate", f"{avg_win:.2f}%")
+            b3.metric("Total P&L", f"${total_pnl:,.2f}")
+            st.dataframe(pd.DataFrame(recent_weeks), width="stretch", hide_index=True)
+            st.caption("Showing run-based weekly summary because no active weekly batch report is available.")
         else:
             st.caption("No weekly batch report found yet.")
 
@@ -1184,6 +1288,11 @@ def render_home():
 def render_results_manager():
     st.title("Results Manager")
     st.caption("Browse and clean saved runs from the interface.")
+
+    # Deferred feedback from post-rerun messages
+    for _key, _fn in [("rm_msg_success", st.success), ("rm_msg_warning", st.warning)]:
+        if _key in st.session_state:
+            _fn(st.session_state.pop(_key))
 
     active_records, trash_records = list_results(RESULTS_PATH)
     summary = summarize_results(active_records, trash_records)
@@ -1206,146 +1315,186 @@ def render_results_manager():
             return True
         return search in record.get("id", "").lower() or search in record.get("symbols", "").lower()
 
-    tabs = st.tabs(["Backtests", "Weekly Batches", "Trash"])
+    # Radio-based tab navigation: persists across st.rerun() via session_state
+    tab_choice = st.radio(
+        "",
+        ["Backtests", "Weekly Batches", "Trash"],
+        horizontal=True,
+        label_visibility="collapsed",
+        key="rm_tab_radio",
+    )
+    st.divider()
 
-    with tabs[0]:
+    def _checkbox_table(rows: list[dict], id_col: str, key: str) -> list[str]:
+        df = pd.DataFrame([{"Select": False, **row} for row in rows])
+        edited = st.data_editor(
+            df,
+            hide_index=True,
+            use_container_width=True,
+            column_config={"Select": st.column_config.CheckboxColumn(" ", default=False)},
+            key=key,
+        )
+        return list(edited.loc[edited["Select"], id_col])
+
+    def _soft_delete_confirm(yes_key: str, no_key: str) -> tuple[bool, bool]:
+        st.warning("This will move all listed items to Trash. Are you sure?")
+        ca, cb = st.columns(2)
+        return ca.button("Yes, move all to Trash", key=yes_key), cb.button("Cancel", key=no_key)
+
+    def _perm_delete_confirm(yes_key: str, no_key: str) -> tuple[bool, bool]:
+        st.warning("This will **permanently** delete all listed items. Are you sure?")
+        ca, cb = st.columns(2)
+        return ca.button("Yes, permanently delete all", key=yes_key), cb.button("Cancel", key=no_key)
+
+    # ------------------------------------------------------------------
+    if tab_choice == "Backtests":
         backtests = [r for r in active_records if r.get("kind") == "backtest" and _matches(r)]
         if backtests:
-            df = pd.DataFrame(
-                [
-                    {
-                        "Run": r["id"],
-                        "Timestamp": r["timestamp"] or r["modified"],
-                        "Trades": r["trades"],
-                        "Net P&L (2R)": r["net_pnl_2r"],
-                        "Symbols": r["symbols"],
-                        "Size": r["size"],
-                    }
-                    for r in backtests
-                ]
-            )
-            st.dataframe(df, width="stretch", hide_index=True)
+            rows = [
+                {
+                    "Run": r["id"],
+                    "Trades": r["trades"],
+                    "Net P&L (2R)": r["net_pnl_2r"],
+                    "Symbols": r["symbols"],
+                    "Size": r["size"],
+                }
+                for r in backtests
+            ]
+            selected = _checkbox_table(rows, "Run", "rm_bt_editor")
 
-            selected_backtests = st.multiselect(
-                "Select backtests",
-                options=[r["id"] for r in backtests],
-                key="rm_selected_backtests",
-            )
-            if st.button("Move selected backtests to Trash", key="rm_trash_backtests"):
-                if not selected_backtests:
-                    st.error("Select at least one backtest to move.")
-                else:
-                    moved, skipped = move_items_to_trash(RESULTS_PATH, selected_backtests)
-                    if moved:
-                        st.success(f"Moved {moved} backtest folder(s) to Trash.")
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("Move selected to Trash", key="rm_bt_del_sel"):
+                    if not selected:
+                        st.error("Check at least one row to move.")
+                    else:
+                        moved, skipped = move_items_to_trash(RESULTS_PATH, selected)
+                        st.session_state["rm_msg_success"] = f"Moved {moved} run(s) to Trash."
+                        if skipped:
+                            st.session_state["rm_msg_warning"] = f"Skipped: {', '.join(skipped)}"
+                        st.rerun()
+            with c2:
+                if st.button("Move all to Trash", key="rm_bt_del_all"):
+                    st.session_state["rm_bt_confirm_all"] = True
+            if st.session_state.get("rm_bt_confirm_all"):
+                confirmed, cancelled = _soft_delete_confirm("rm_bt_confirm_yes", "rm_bt_confirm_no")
+                if confirmed:
+                    moved, skipped = move_items_to_trash(RESULTS_PATH, [r["id"] for r in backtests])
+                    st.session_state["rm_bt_confirm_all"] = False
+                    st.session_state["rm_msg_success"] = f"Moved {moved} run(s) to Trash."
                     if skipped:
-                        st.warning(f"Skipped: {', '.join(skipped)}")
+                        st.session_state["rm_msg_warning"] = f"Skipped: {', '.join(skipped)}"
+                    st.rerun()
+                if cancelled:
+                    st.session_state["rm_bt_confirm_all"] = False
+                    st.rerun()
         else:
             st.caption("No backtests match your search.")
 
-    with tabs[1]:
+    # ------------------------------------------------------------------
+    elif tab_choice == "Weekly Batches":
         batches = [r for r in active_records if r.get("kind") == "weekly_batch" and _matches(r)]
         if batches:
-            df = pd.DataFrame(
-                [
-                    {
-                        "Batch": r["id"],
-                        "Updated": r["modified"],
-                        "Trades": r["trades"],
-                        "Net P&L (2R)": r["net_pnl_2r"],
-                        "Symbols": r["symbols"],
-                        "Size": r["size"],
-                    }
-                    for r in batches
-                ]
-            )
-            st.dataframe(df, width="stretch", hide_index=True)
+            rows = [
+                {
+                    "Batch": r["id"],
+                    "Updated": r["modified"],
+                    "Trades": r["trades"],
+                    "Net P&L (2R)": r["net_pnl_2r"],
+                    "Symbols": r["symbols"],
+                    "Size": r["size"],
+                }
+                for r in batches
+            ]
+            selected = _checkbox_table(rows, "Batch", "rm_wk_editor")
 
-            selected_batches = st.multiselect(
-                "Select weekly batches",
-                options=[r["id"] for r in batches],
-                key="rm_selected_batches",
-            )
-            if st.button("Move selected weekly batches to Trash", key="rm_trash_batches"):
-                if not selected_batches:
-                    st.error("Select at least one batch to move.")
-                else:
-                    moved, skipped = move_items_to_trash(RESULTS_PATH, selected_batches)
-                    if moved:
-                        st.success(f"Moved {moved} batch folder(s) to Trash.")
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("Move selected to Trash", key="rm_wk_del_sel"):
+                    if not selected:
+                        st.error("Check at least one row to move.")
+                    else:
+                        moved, skipped = move_items_to_trash(RESULTS_PATH, selected)
+                        st.session_state["rm_msg_success"] = f"Moved {moved} batch(es) to Trash."
+                        if skipped:
+                            st.session_state["rm_msg_warning"] = f"Skipped: {', '.join(skipped)}"
+                        st.rerun()
+            with c2:
+                if st.button("Move all to Trash", key="rm_wk_del_all"):
+                    st.session_state["rm_wk_confirm_all"] = True
+            if st.session_state.get("rm_wk_confirm_all"):
+                confirmed, cancelled = _soft_delete_confirm("rm_wk_confirm_yes", "rm_wk_confirm_no")
+                if confirmed:
+                    moved, skipped = move_items_to_trash(RESULTS_PATH, [r["id"] for r in batches])
+                    st.session_state["rm_wk_confirm_all"] = False
+                    st.session_state["rm_msg_success"] = f"Moved {moved} batch(es) to Trash."
                     if skipped:
-                        st.warning(f"Skipped: {', '.join(skipped)}")
+                        st.session_state["rm_msg_warning"] = f"Skipped: {', '.join(skipped)}"
+                    st.rerun()
+                if cancelled:
+                    st.session_state["rm_wk_confirm_all"] = False
+                    st.rerun()
         else:
             st.caption("No weekly batches match your search.")
 
-    with tabs[2]:
+    # ------------------------------------------------------------------
+    elif tab_choice == "Trash":
         trash_filtered = [r for r in trash_records if _matches(r)]
         if trash_filtered:
-            df = pd.DataFrame(
-                [
-                    {
-                        "Item": r["id"],
-                        "Type": r["kind"],
-                        "Updated": r["modified"],
-                        "Trades": r["trades"],
-                        "Net P&L (2R)": r["net_pnl_2r"],
-                        "Size": r["size"],
-                    }
-                    for r in trash_filtered
-                ]
-            )
-            st.dataframe(df, width="stretch", hide_index=True)
+            rows = [
+                {
+                    "Item": r["id"],
+                    "Type": r["kind"],
+                    "Updated": r["modified"],
+                    "Trades": r["trades"],
+                    "Net P&L (2R)": r["net_pnl_2r"],
+                    "Size": r["size"],
+                }
+                for r in trash_filtered
+            ]
+            selected = _checkbox_table(rows, "Item", "rm_tr_editor")
 
-            selected_trash = st.multiselect(
-                "Select Trash items",
-                options=[r["id"] for r in trash_filtered],
-                key="rm_selected_trash",
-            )
-            c1, c2 = st.columns(2)
+            c1, c2, c3 = st.columns(3)
             with c1:
-                if st.button("Restore selected", key="rm_restore"):
-                    if not selected_trash:
-                        st.error("Select at least one Trash item to restore.")
+                if st.button("Restore selected", key="rm_tr_restore"):
+                    if not selected:
+                        st.error("Check at least one row to restore.")
                     else:
-                        restored, skipped = restore_items_from_trash(RESULTS_PATH, selected_trash)
-                        if restored:
-                            st.success(f"Restored {restored} item(s).")
+                        restored, skipped = restore_items_from_trash(RESULTS_PATH, selected)
+                        st.session_state["rm_msg_success"] = f"Restored {restored} item(s)."
                         if skipped:
-                            st.warning(f"Skipped: {', '.join(skipped)}")
+                            st.session_state["rm_msg_warning"] = f"Skipped: {', '.join(skipped)}"
+                        st.rerun()
             with c2:
-                confirm_text = st.text_input(
-                    "Type DELETE to permanently remove selected",
-                    key="rm_delete_confirm",
-                )
-                delete_ack = st.checkbox(
-                    "I understand this action is permanent",
-                    key="rm_delete_ack",
-                )
-                can_delete = bool(selected_trash) and confirm_text == "DELETE" and delete_ack
-                if st.button(
-                    "Delete selected permanently",
-                    key="rm_delete",
-                    disabled=not can_delete,
-                ):
-                    if not selected_trash:
-                        st.error("Select at least one Trash item to delete.")
-                    elif confirm_text != "DELETE":
-                        st.error("Type DELETE exactly to confirm permanent deletion.")
-                    elif not delete_ack:
-                        st.error("Check the permanent delete acknowledgment box.")
+                if st.button("Delete selected", key="rm_tr_del_sel"):
+                    if not selected:
+                        st.error("Check at least one row to delete.")
                     else:
-                        deleted, skipped, reclaimed = delete_items_permanently(RESULTS_PATH, selected_trash)
-                        if deleted:
-                            reclaimed_mb = reclaimed / (1024 * 1024)
-                            st.success(f"Deleted {deleted} item(s) permanently. Reclaimed {reclaimed_mb:.2f} MB.")
-                        if not deleted and not skipped:
-                            st.info("No items were deleted.")
+                        deleted, skipped, reclaimed = delete_items_permanently(RESULTS_PATH, selected)
+                        reclaimed_mb = reclaimed / (1024 * 1024)
+                        st.session_state["rm_msg_success"] = f"Permanently deleted {deleted} item(s). Reclaimed {reclaimed_mb:.2f} MB."
                         if skipped:
-                            st.warning(f"Skipped: {', '.join(skipped)}")
+                            st.session_state["rm_msg_warning"] = f"Skipped: {', '.join(skipped)}"
+                        st.rerun()
+            with c3:
+                if st.button("Delete all", key="rm_tr_del_all"):
+                    st.session_state["rm_tr_confirm_all"] = True
+            if st.session_state.get("rm_tr_confirm_all"):
+                confirmed, cancelled = _perm_delete_confirm("rm_tr_confirm_yes", "rm_tr_confirm_no")
+                if confirmed:
+                    all_ids = [r["id"] for r in trash_filtered]
+                    deleted, skipped, reclaimed = delete_items_permanently(RESULTS_PATH, all_ids)
+                    reclaimed_mb = reclaimed / (1024 * 1024)
+                    st.session_state["rm_tr_confirm_all"] = False
+                    st.session_state["rm_msg_success"] = f"Permanently deleted {deleted} item(s). Reclaimed {reclaimed_mb:.2f} MB."
+                    if skipped:
+                        st.session_state["rm_msg_warning"] = f"Skipped: {', '.join(skipped)}"
+                    st.rerun()
+                if cancelled:
+                    st.session_state["rm_tr_confirm_all"] = False
+                    st.rerun()
         else:
             st.caption("Trash is empty.")
-
-    st.caption(f"Managed results folder: {RESULTS_PATH}")
 
 
 def build_long_view(results_dir: Path, limit: int = 5) -> dict:
