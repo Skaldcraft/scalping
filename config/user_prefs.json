@@ -1,6 +1,6 @@
 {
-  "start_date": "2026-03-31",
-  "end_date": "2026-04-02",
+  "start_date": "2026-04-01",
+  "end_date": "2026-04-07",
   "pre_session_enabled": true,
   "selector_top_n": 4,
   "freeze_daily": true,
