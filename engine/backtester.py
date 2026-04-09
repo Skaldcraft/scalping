@@ -33,6 +33,16 @@ from data.fetcher import fetch_daily, fetch_intraday_chunked, load_csv
 from data.validator import get_session_dates, validate
 from engine.session import SessionGate
 from engine.opening_range import calculate_opening_range, calculate_atr, is_manipulation_candle
+from engine.indicators import (
+    add_atr,
+    classify_trend_alignment,
+    dxy_bias_at,
+    dxy_confirms_direction,
+    get_fib_zones,
+    in_fib_zone,
+    resample_ohlcv,
+    to_heikin_ashi,
+)
 from engine.signals import (
     detect_breakout_signal,
     detect_manipulation_signal,
@@ -66,10 +76,12 @@ class Backtester:
             tz=config["session"]["timezone"],
         )
         self.or_minutes     = config["opening_range"]["candle_size_minutes"]
+        self.execution_minutes = int(config.get("strategy", {}).get("execution_timeframe_minutes", 1))
         self.atr_period     = config["strategy"]["atr_period"]
         self.manip_threshold = config["strategy"]["manipulation_threshold_pct"]
         self.reward_ratios  = config["strategy"]["reward_ratios"]
-        self.risk_pct       = config["account"]["risk_per_trade_pct"]
+        # Safety lock is intentionally hard-coded as top-level priority.
+        self.risk_pct       = 1.0
         self.commission     = config["commissions"]["per_trade_flat"]
         self.starting_capital = config["account"]["starting_capital"]
         self.session_end_time = pd.Timestamp(config["session"]["end_time"]).time()
@@ -84,6 +96,42 @@ class Backtester:
         self.displacement_min_body_pct = float(
             trend_mode.get("displacement_min_body_pct", 0.0)
         )
+        self.use_heikin_ashi = bool(config.get("strategy", {}).get("use_heikin_ashi", False))
+        self.require_trend_alignment = bool(config.get("strategy", {}).get("require_trend_alignment", True))
+        self.use_fib_zone_filter = bool(config.get("strategy", {}).get("fibonacci_zone_filter", True))
+
+        mtf_cfg = config.get("strategy", {}).get("multi_timeframe", {})
+        self.mtf_enabled = bool(mtf_cfg.get("enabled", True))
+        self.ema_1m_period = int(mtf_cfg.get("ema_1m_period", 100))
+        self.ema_5m_fast = int(mtf_cfg.get("ema_5m_fast", 20))
+        self.ema_5m_slow = int(mtf_cfg.get("ema_5m_slow", 50))
+        self.ema_15m_fast = int(mtf_cfg.get("ema_15m_fast", 20))
+        self.ema_15m_slow = int(mtf_cfg.get("ema_15m_slow", 50))
+        self.require_ha_no_opposite_wick = bool(
+            mtf_cfg.get("require_ha_no_opposite_wick", True)
+        )
+
+        ext_cfg = config.get("strategy", {}).get("external_bias", {})
+        self.dxy_filter_enabled = bool(ext_cfg.get("dxy_filter_enabled", True))
+        self.dxy_symbol = str(ext_cfg.get("dxy_symbol", "DX-Y.NYB"))
+        self.dxy_apply_pairs = list(ext_cfg.get("apply_to_pairs", ["EURUSD", "EURUSD=X", "GBPUSD", "GBPUSD=X"]))
+        self.dxy_ema_fast = int(ext_cfg.get("ema_fast", 20))
+        self.dxy_ema_slow = int(ext_cfg.get("ema_slow", 50))
+
+        dyn_stop = config.get("strategy", {}).get("dynamic_stop", {})
+        self.dynamic_stop_enabled = bool(dyn_stop.get("enabled", True))
+        self.dynamic_stop_atr_period = int(dyn_stop.get("atr_period_1m", 14))
+        self.dynamic_stop_atr_mult = float(dyn_stop.get("atr_multiplier", 1.75))
+
+        rev_cfg = config.get("strategy", {})
+        self.reversal_touch_and_turn_tp = bool(rev_cfg.get("reversal_touch_and_turn_tp", True))
+        self.reversal_tp_level = float(rev_cfg.get("reversal_tp_level", 0.382))
+
+        partial_cfg = config.get("strategy", {}).get("partial_profit", {})
+        self.partial_enabled = bool(partial_cfg.get("enabled", True))
+        self.partial_first_scale_ratio = float(partial_cfg.get("first_scale_ratio", 1.0))
+        self.partial_first_scale_pct = float(partial_cfg.get("first_scale_pct", 50.0))
+        self.partial_move_sl_to_be = bool(partial_cfg.get("move_stop_to_breakeven", True))
 
     # ------------------------------------------------------------------
 
@@ -128,7 +176,7 @@ class Backtester:
         # ------------------------------------------------------------------
         # 1. Load data
         # ------------------------------------------------------------------
-        interval_min = self.or_minutes if self.or_minutes >= 5 else 5
+        interval_min = self.execution_minutes
         interval_str = f"{interval_min}m"
 
         # Add ATR lookback buffer (14 trading days ≈ 20 calendar days)
@@ -136,9 +184,24 @@ class Backtester:
         data_start  = start_date - atr_buffer
 
         if source_info["type"] == "equity":
-            intraday_df = fetch_intraday_chunked(
-                symbol, interval_str, data_start, end_date
-            )
+            try:
+                intraday_df = fetch_intraday_chunked(
+                    symbol, interval_str, data_start, end_date
+                )
+            except Exception as exc:
+                if interval_str == "1m":
+                    log.warning(
+                        "[%s] 1m fetch unavailable for requested range. Falling back to 5m execution bars: %s",
+                        symbol,
+                        exc,
+                    )
+                    interval_min = 5
+                    interval_str = "5m"
+                    intraday_df = fetch_intraday_chunked(
+                        symbol, interval_str, data_start, end_date
+                    )
+                else:
+                    raise
             daily_df = fetch_daily(symbol, data_start, end_date)
         else:
             intraday_df = load_csv(source_info["path"], symbol)
@@ -148,6 +211,26 @@ class Backtester:
             (intraday_df.index.date >= start_date)
             & (intraday_df.index.date < end_date)
         ]
+
+        bars_5m = resample_ohlcv(intraday_df, "5min")
+        bars_15m = resample_ohlcv(intraday_df, "15min")
+
+        dxy_df = pd.DataFrame()
+        if self.dxy_filter_enabled:
+            try:
+                dxy_df = fetch_intraday_chunked(
+                    self.dxy_symbol,
+                    interval_str,
+                    data_start,
+                    end_date,
+                )
+                dxy_df = dxy_df[
+                    (dxy_df.index.date >= start_date)
+                    & (dxy_df.index.date < end_date)
+                ]
+            except Exception as exc:
+                log.warning("[%s] DXY fetch unavailable (%s): %s", symbol, self.dxy_symbol, exc)
+                dxy_df = pd.DataFrame()
 
         # ------------------------------------------------------------------
         # 2. Validate
@@ -171,7 +254,7 @@ class Backtester:
         # Circuit breaker resets each session
         cb = CircuitBreaker(
             starting_equity=self.starting_capital,
-            daily_loss_limit_pct=self.cfg["account"]["daily_loss_limit_pct"],
+            daily_loss_limit_pct=5.0,
             profit_factor_floor=self.cfg["risk"]["profit_factor_floor"],
             min_trades_pf=self.cfg["risk"]["min_trades_before_pf_check"],
         )
@@ -181,6 +264,9 @@ class Backtester:
                 symbol=symbol,
                 session_date=session_date,
                 intraday_df=intraday_df,
+                    bars_5m=bars_5m,
+                    bars_15m=bars_15m,
+                    dxy_df=dxy_df,
                 daily_df=daily_df,
                 account_equity=account_equity,
                 circuit_breaker=cb,
@@ -206,6 +292,9 @@ class Backtester:
         symbol: str,
         session_date: str,
         intraday_df: pd.DataFrame,
+        bars_5m: pd.DataFrame,
+        bars_15m: pd.DataFrame,
+        dxy_df: pd.DataFrame,
         daily_df: pd.DataFrame,
         account_equity: float,
         circuit_breaker: "CircuitBreaker",
@@ -226,7 +315,11 @@ class Backtester:
                 manipulation_flagged=False,
                 mode_activated=StrategyMode.NO_TRADE.value,
                 breakout_signal_fired=False, retest_confirmed=False,
-                pattern_confirmed=False, trade_executed=False,
+                pattern_confirmed=False,
+                trend_aligned=False,
+                dxy_filter_confirmed=False,
+                trigger_candle="",
+                trade_executed=False,
                 rejection_reasons=rejection_reasons,
             )
 
@@ -280,6 +373,8 @@ class Backtester:
                 symbol, session_date, rejection_reasons, opening_range, atr_14, manipulation_flagged
             )
 
+        eval_post_bars = to_heikin_ashi(post_bars) if self.use_heikin_ashi else post_bars
+
         # ------------------------------------------------------------------
         # Signal detection
         # ------------------------------------------------------------------
@@ -289,7 +384,12 @@ class Backtester:
         if manipulation_flagged:
             mode_activated = StrategyMode.MANIPULATION
             signal = detect_manipulation_signal(
-                post_bars, opening_range, initial_spike_direction, self.session_end_time
+                post_bars,
+                opening_range,
+                initial_spike_direction,
+                self.session_end_time,
+                require_full_body_outside=True,
+                require_extreme_boundary=True,
             )
             if signal is None:
                 rejection_reasons.append("no_manipulation_pattern_found")
@@ -300,6 +400,9 @@ class Backtester:
                 post_bars,
                 opening_range,
                 self.session_end_time,
+                eval_bars=eval_post_bars,
+                require_high_volume_doji=True,
+                require_no_opposite_wick=self.use_heikin_ashi and self.require_ha_no_opposite_wick,
                 allow_displacement_gap_entry=self.allow_displacement_gap_entry,
                 entry_priority=self.entry_priority,
                 displacement_min_atr_pct=self.displacement_min_atr_pct,
@@ -332,9 +435,150 @@ class Backtester:
                 breakout_signal_fired=False,
                 retest_confirmed=False,
                 pattern_confirmed=False,
+                trend_aligned=False,
+                dxy_filter_confirmed=False,
+                trigger_candle="",
                 trade_executed=False,
                 rejection_reasons=rejection_reasons,
             )
+
+        # ------------------------------------------------------------------
+        # Multi-timeframe trend alignment and DXY filter
+        # ------------------------------------------------------------------
+        trend_state = classify_trend_alignment(
+            signal.signal_time,
+            intraday_df,
+            bars_5m,
+            bars_15m,
+            ema_1m_period=self.ema_1m_period,
+            ema_5m_fast=self.ema_5m_fast,
+            ema_5m_slow=self.ema_5m_slow,
+            ema_15m_fast=self.ema_15m_fast,
+            ema_15m_slow=self.ema_15m_slow,
+        ) if self.mtf_enabled else "unknown"
+
+        signal.trend_aligned = (
+            (signal.direction == TradeDirection.LONG and trend_state == "bullish")
+            or (signal.direction == TradeDirection.SHORT and trend_state == "bearish")
+        ) if self.mtf_enabled else True
+
+        if self.require_trend_alignment and not signal.trend_aligned:
+            rejection_reasons.append(f"trend_not_aligned:{trend_state}")
+            return [], SessionSummary(
+                session_date=session_date,
+                instrument=symbol,
+                or_high=opening_range.high,
+                or_low=opening_range.low,
+                or_midpoint=opening_range.midpoint,
+                atr_14=atr_14,
+                manipulation_flagged=manipulation_flagged,
+                mode_activated=mode_activated.value,
+                breakout_signal_fired=True,
+                retest_confirmed=signal.retest_detected,
+                pattern_confirmed=bool(signal.pattern_detected),
+                trend_aligned=False,
+                dxy_filter_confirmed=False,
+                trigger_candle=signal.trigger_candle or "",
+                trade_executed=False,
+                rejection_reasons=rejection_reasons,
+            )
+
+        dxy_bias = dxy_bias_at(
+            signal.signal_time,
+            dxy_df,
+            ema_fast=self.dxy_ema_fast,
+            ema_slow=self.dxy_ema_slow,
+        ) if self.dxy_filter_enabled else "unknown"
+
+        signal.dxy_bias = dxy_bias
+        signal.dxy_filter_confirmed = dxy_confirms_direction(
+            symbol,
+            signal.direction,
+            dxy_bias,
+            self.dxy_apply_pairs,
+        ) if self.dxy_filter_enabled else True
+
+        if self.dxy_filter_enabled and not signal.dxy_filter_confirmed:
+            rejection_reasons.append(f"dxy_filter_rejected:{dxy_bias}")
+            return [], SessionSummary(
+                session_date=session_date,
+                instrument=symbol,
+                or_high=opening_range.high,
+                or_low=opening_range.low,
+                or_midpoint=opening_range.midpoint,
+                atr_14=atr_14,
+                manipulation_flagged=manipulation_flagged,
+                mode_activated=mode_activated.value,
+                breakout_signal_fired=True,
+                retest_confirmed=signal.retest_detected,
+                pattern_confirmed=bool(signal.pattern_detected),
+                trend_aligned=signal.trend_aligned,
+                dxy_filter_confirmed=False,
+                trigger_candle=signal.trigger_candle or "",
+                trade_executed=False,
+                rejection_reasons=rejection_reasons,
+            )
+
+        # ------------------------------------------------------------------
+        # Fibonacci zone gating + dynamic stop/targets
+        # ------------------------------------------------------------------
+        fib = get_fib_zones(opening_range, reversal_tp_level=self.reversal_tp_level)
+        signal.fib_cheap_zone = fib.cheap_buy_level
+        signal.fib_expensive_zone = fib.expensive_sell_level
+
+        if self.use_fib_zone_filter and not in_fib_zone(signal.entry_price, signal.direction, fib):
+            rejection_reasons.append("outside_fib_zone")
+            return [], SessionSummary(
+                session_date=session_date,
+                instrument=symbol,
+                or_high=opening_range.high,
+                or_low=opening_range.low,
+                or_midpoint=opening_range.midpoint,
+                atr_14=atr_14,
+                manipulation_flagged=manipulation_flagged,
+                mode_activated=mode_activated.value,
+                breakout_signal_fired=True,
+                retest_confirmed=signal.retest_detected,
+                pattern_confirmed=bool(signal.pattern_detected),
+                trend_aligned=signal.trend_aligned,
+                dxy_filter_confirmed=signal.dxy_filter_confirmed,
+                trigger_candle=signal.trigger_candle or "",
+                trade_executed=False,
+                rejection_reasons=rejection_reasons,
+            )
+
+        if self.dynamic_stop_enabled:
+            post_atr = add_atr(post_bars, self.dynamic_stop_atr_period, name="atr_1m")
+            atr_val = float(post_atr.loc[post_atr.index <= signal.signal_time].iloc[-1]["atr_1m"]) if not post_atr.loc[post_atr.index <= signal.signal_time].empty else 0.0
+            if atr_val > 0:
+                if signal.direction == TradeDirection.LONG:
+                    signal.stop_loss = round(signal.entry_price - (atr_val * self.dynamic_stop_atr_mult), 6)
+                else:
+                    signal.stop_loss = round(signal.entry_price + (atr_val * self.dynamic_stop_atr_mult), 6)
+
+        if signal.direction == TradeDirection.LONG:
+            risk = signal.entry_price - signal.stop_loss
+            if risk <= 0:
+                rejection_reasons.append("invalid_dynamic_stop")
+                return [], self._no_trade_summary(symbol, session_date, rejection_reasons, opening_range, atr_14, manipulation_flagged)
+            signal.one_r_target = round(signal.entry_price + (risk * self.partial_first_scale_ratio), 6)
+            signal.take_profit_2r = round(signal.entry_price + risk * 2.0, 6)
+            signal.take_profit_3r = round(signal.entry_price + risk * 3.0, 6)
+            if signal.mode == StrategyMode.MANIPULATION and self.reversal_touch_and_turn_tp:
+                signal.take_profit_2r = fib.tp_reversal_level
+        else:
+            risk = signal.stop_loss - signal.entry_price
+            if risk <= 0:
+                rejection_reasons.append("invalid_dynamic_stop")
+                return [], self._no_trade_summary(symbol, session_date, rejection_reasons, opening_range, atr_14, manipulation_flagged)
+            signal.one_r_target = round(signal.entry_price - (risk * self.partial_first_scale_ratio), 6)
+            signal.take_profit_2r = round(signal.entry_price - risk * 2.0, 6)
+            signal.take_profit_3r = round(signal.entry_price - risk * 3.0, 6)
+            if signal.mode == StrategyMode.MANIPULATION and self.reversal_touch_and_turn_tp:
+                signal.take_profit_2r = fib.tp_reversal_level
+
+        signal.partial_scale_pct = self.partial_first_scale_pct
+        signal.move_sl_to_be = self.partial_move_sl_to_be
 
         # ------------------------------------------------------------------
         # Enrich signal with instrument and ATR data
@@ -374,6 +618,9 @@ class Backtester:
             breakout_signal_fired=signal.mode in (StrategyMode.BREAKOUT, StrategyMode.MEAN_REVERSION),
             retest_confirmed=signal.retest_detected,
             pattern_confirmed=bool(signal.pattern_detected),
+            trend_aligned=signal.trend_aligned,
+            dxy_filter_confirmed=signal.dxy_filter_confirmed,
+            trigger_candle=signal.trigger_candle or "",
             trade_executed=True,
             trade_id=trade.trade_id,
             rejection_reasons=[],
@@ -402,6 +649,9 @@ class Backtester:
             breakout_signal_fired=False,
             retest_confirmed=False,
             pattern_confirmed=False,
+            trend_aligned=False,
+            dxy_filter_confirmed=False,
+            trigger_candle="",
             trade_executed=False,
             rejection_reasons=rejection_reasons,
         )

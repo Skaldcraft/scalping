@@ -76,6 +76,15 @@ class SignalContext:
     displacement_detected: bool = False
     retest_detected:     bool = False
     breakout_candle_time: Optional[datetime] = None
+    trend_aligned:        bool = False
+    dxy_filter_confirmed: bool = False
+    dxy_bias:             Optional[str] = None
+    fib_cheap_zone:       Optional[float] = None
+    fib_expensive_zone:   Optional[float] = None
+    trigger_candle:       Optional[str] = None
+    one_r_target:         Optional[float] = None
+    partial_scale_pct:    float = 50.0
+    move_sl_to_be:        bool = True
     rejection_reasons:   List[str] = field(default_factory=list)
 
 
@@ -113,6 +122,11 @@ class TradeResult:
     take_profit_3r:     float
     position_size:      float           # units / shares / lots
     risk_amount:        float           # dollars risked
+    one_r_target:       Optional[float] = None
+    partial_scale_pct:  float = 50.0
+    partial_exit_time:  Optional[datetime] = None
+    partial_exit_price: Optional[float] = None
+    stop_moved_to_be:   bool = False
 
     # --- 2R outcome ---
     exit_time_2r:       Optional[datetime] = None
@@ -147,6 +161,9 @@ class SessionSummary:
     breakout_signal_fired: bool
     retest_confirmed:      bool
     pattern_confirmed:     bool
-    trade_executed:        bool
+    trend_aligned:         bool = False
+    dxy_filter_confirmed:  bool = False
+    trigger_candle:        str = ""
+    trade_executed:        bool = False
     trade_id:              Optional[str]  = None
     rejection_reasons:     List[str]      = field(default_factory=list)

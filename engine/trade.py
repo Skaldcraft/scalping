@@ -86,6 +86,7 @@ def resolve_trade(
     sl          = signal.stop_loss
     tp2         = signal.take_profit_2r
     tp3         = signal.take_profit_3r
+    one_r       = signal.one_r_target
     direction   = signal.direction
 
     position_size, risk_amount = calculate_position_size(
@@ -93,10 +94,33 @@ def resolve_trade(
     )
 
     # Track resolution state for each target independently
-    result_2r = {"resolved": False, "exit_time": None, "exit_price": None,
-                 "outcome": None, "pnl": None}
-    result_3r = {"resolved": False, "exit_time": None, "exit_price": None,
-                 "outcome": None, "pnl": None}
+    result_2r = {
+        "resolved": False,
+        "exit_time": None,
+        "exit_price": None,
+        "outcome": None,
+        "pnl": None,
+        "partial_taken": False,
+        "partial_time": None,
+        "partial_price": None,
+        "partial_pnl": 0.0,
+    }
+    result_3r = {
+        "resolved": False,
+        "exit_time": None,
+        "exit_price": None,
+        "outcome": None,
+        "pnl": None,
+        "partial_taken": False,
+        "partial_time": None,
+        "partial_price": None,
+        "partial_pnl": 0.0,
+    }
+
+    partial_scale = max(0.0, min(signal.partial_scale_pct / 100.0, 1.0))
+    remaining_scale = 1.0 - partial_scale
+    stop_2r = sl
+    stop_3r = sl
 
     exit_reason = ExitReason.SESSION_END
 
@@ -107,45 +131,130 @@ def resolve_trade(
         if ts.time() >= session_end_time:
             close_price = float(bar["close"])
             if not result_2r["resolved"]:
-                _close_at(result_2r, bar_time, close_price, entry_price,
-                          direction, position_size, commission)
+                _close_scaled_target(
+                    result=result_2r,
+                    exit_time=bar_time,
+                    exit_price=close_price,
+                    entry_price=entry_price,
+                    direction=direction,
+                    position_size=position_size,
+                    commission=commission,
+                    remaining_scale=remaining_scale if result_2r["partial_taken"] else 1.0,
+                )
             if not result_3r["resolved"]:
-                _close_at(result_3r, bar_time, close_price, entry_price,
-                          direction, position_size, commission)
+                _close_scaled_target(
+                    result=result_3r,
+                    exit_time=bar_time,
+                    exit_price=close_price,
+                    entry_price=entry_price,
+                    direction=direction,
+                    position_size=position_size,
+                    commission=commission,
+                    remaining_scale=remaining_scale if result_3r["partial_taken"] else 1.0,
+                )
             exit_reason = ExitReason.SESSION_END
             break
 
         if direction == TradeDirection.LONG:
-            hit_sl  = bar["low"]  <= sl
-            hit_tp2 = bar["high"] >= tp2
-            hit_tp3 = bar["high"] >= tp3
+            bar_low = float(bar["low"])
+            bar_high = float(bar["high"])
+            hit_sl_2r = bar_low <= stop_2r
+            hit_sl_3r = bar_low <= stop_3r
+            hit_one_r = (one_r is not None) and (bar_high >= one_r)
+            hit_tp2 = bar_high >= tp2
+            hit_tp3 = bar_high >= tp3
         else:
-            hit_sl  = bar["high"] >= sl
-            hit_tp2 = bar["low"]  <= tp2
-            hit_tp3 = bar["low"]  <= tp3
+            bar_low = float(bar["low"])
+            bar_high = float(bar["high"])
+            hit_sl_2r = bar_high >= stop_2r
+            hit_sl_3r = bar_high >= stop_3r
+            hit_one_r = (one_r is not None) and (bar_low <= one_r)
+            hit_tp2 = bar_low <= tp2
+            hit_tp3 = bar_low <= tp3
 
-        # Stop-loss hit — closes all open targets
-        if hit_sl:
+        # Conservative ordering: stop checks first, then profit events.
+        if hit_sl_2r and not result_2r["resolved"]:
+            _close_scaled_target(
+                result=result_2r,
+                exit_time=bar_time,
+                exit_price=stop_2r,
+                entry_price=entry_price,
+                direction=direction,
+                position_size=position_size,
+                commission=commission,
+                remaining_scale=remaining_scale if result_2r["partial_taken"] else 1.0,
+            )
+            result_2r["outcome"] = "loss"
             exit_reason = ExitReason.SL_HIT
-            if not result_2r["resolved"]:
-                _close_at(result_2r, bar_time, sl, entry_price,
-                          direction, position_size, commission)
-                result_2r["outcome"] = "loss"
-            if not result_3r["resolved"]:
-                _close_at(result_3r, bar_time, sl, entry_price,
-                          direction, position_size, commission)
-                result_3r["outcome"] = "loss"
-            break
+
+        if hit_sl_3r and not result_3r["resolved"]:
+            _close_scaled_target(
+                result=result_3r,
+                exit_time=bar_time,
+                exit_price=stop_3r,
+                entry_price=entry_price,
+                direction=direction,
+                position_size=position_size,
+                commission=commission,
+                remaining_scale=remaining_scale if result_3r["partial_taken"] else 1.0,
+            )
+            result_3r["outcome"] = "loss"
+            exit_reason = ExitReason.SL_HIT
+
+        if hit_one_r and one_r is not None:
+            if (not result_2r["resolved"]) and (not result_2r["partial_taken"]) and partial_scale > 0:
+                _take_partial(
+                    result=result_2r,
+                    exit_time=bar_time,
+                    exit_price=one_r,
+                    entry_price=entry_price,
+                    direction=direction,
+                    position_size=position_size,
+                    commission=commission,
+                    partial_scale=partial_scale,
+                )
+                if signal.move_sl_to_be:
+                    stop_2r = entry_price
+
+            if (not result_3r["resolved"]) and (not result_3r["partial_taken"]) and partial_scale > 0:
+                _take_partial(
+                    result=result_3r,
+                    exit_time=bar_time,
+                    exit_price=one_r,
+                    entry_price=entry_price,
+                    direction=direction,
+                    position_size=position_size,
+                    commission=commission,
+                    partial_scale=partial_scale,
+                )
+                if signal.move_sl_to_be:
+                    stop_3r = entry_price
 
         if hit_tp2 and not result_2r["resolved"]:
-            _close_at(result_2r, bar_time, tp2, entry_price,
-                      direction, position_size, commission)
+            _close_scaled_target(
+                result=result_2r,
+                exit_time=bar_time,
+                exit_price=tp2,
+                entry_price=entry_price,
+                direction=direction,
+                position_size=position_size,
+                commission=commission,
+                remaining_scale=remaining_scale if result_2r["partial_taken"] else 1.0,
+            )
             result_2r["outcome"] = "win"
             exit_reason = ExitReason.TP_HIT
 
         if hit_tp3 and not result_3r["resolved"]:
-            _close_at(result_3r, bar_time, tp3, entry_price,
-                      direction, position_size, commission)
+            _close_scaled_target(
+                result=result_3r,
+                exit_time=bar_time,
+                exit_price=tp3,
+                entry_price=entry_price,
+                direction=direction,
+                position_size=position_size,
+                commission=commission,
+                remaining_scale=remaining_scale if result_3r["partial_taken"] else 1.0,
+            )
             result_3r["outcome"] = "win"
             exit_reason = ExitReason.TP_HIT
 
@@ -155,10 +264,26 @@ def resolve_trade(
 
     # Handle any targets not yet resolved (session ended, loop exhausted)
     if remaining_bars.empty:
-        _close_at(result_2r, signal.signal_time, entry_price, entry_price,
-                  direction, position_size, commission)
-        _close_at(result_3r, signal.signal_time, entry_price, entry_price,
-                  direction, position_size, commission)
+        _close_scaled_target(
+            result_2r,
+            signal.signal_time,
+            entry_price,
+            entry_price,
+            direction,
+            position_size,
+            commission,
+            remaining_scale=remaining_scale if result_2r["partial_taken"] else 1.0,
+        )
+        _close_scaled_target(
+            result_3r,
+            signal.signal_time,
+            entry_price,
+            entry_price,
+            direction,
+            position_size,
+            commission,
+            remaining_scale=remaining_scale if result_3r["partial_taken"] else 1.0,
+        )
 
     or_ = signal.opening_range
     return TradeResult(
@@ -180,6 +305,13 @@ def resolve_trade(
         take_profit_3r=tp3,
         position_size=position_size,
         risk_amount=risk_amount,
+        one_r_target=one_r,
+        partial_scale_pct=signal.partial_scale_pct,
+        partial_exit_time=result_2r["partial_time"] or result_3r["partial_time"],
+        partial_exit_price=result_2r["partial_price"] or result_3r["partial_price"],
+        stop_moved_to_be=signal.move_sl_to_be and (
+            result_2r["partial_taken"] or result_3r["partial_taken"]
+        ),
         exit_time_2r=result_2r["exit_time"],
         exit_price_2r=result_2r["exit_price"],
         outcome_2r=result_2r["outcome"],
@@ -192,20 +324,56 @@ def resolve_trade(
     )
 
 
-def _close_at(result: dict, exit_time, exit_price, entry_price,
-              direction: TradeDirection, position_size: float, commission: float):
-    """Resolve one target at a given exit price."""
+def _close_scaled_target(
+    result: dict,
+    exit_time,
+    exit_price,
+    entry_price,
+    direction: TradeDirection,
+    position_size: float,
+    commission: float,
+    remaining_scale: float,
+):
+    """Resolve one target using remaining position size after optional partial scale-out."""
     if result["resolved"]:
         return
     result["resolved"]   = True
     result["exit_time"]  = exit_time
     result["exit_price"] = exit_price
 
+    qty = max(0.0, position_size * remaining_scale)
     if direction == TradeDirection.LONG:
-        gross = (exit_price - entry_price) * position_size
+        gross = (exit_price - entry_price) * qty
     else:
-        gross = (entry_price - exit_price) * position_size
+        gross = (entry_price - exit_price) * qty
 
-    result["pnl"] = round(gross - commission, 4)
+    leg_commission = commission * remaining_scale
+    result["pnl"] = round(result.get("partial_pnl", 0.0) + gross - leg_commission, 4)
     if result["outcome"] is None:
         result["outcome"] = "win" if result["pnl"] > 0 else "loss"
+
+
+def _take_partial(
+    result: dict,
+    exit_time,
+    exit_price,
+    entry_price,
+    direction: TradeDirection,
+    position_size: float,
+    commission: float,
+    partial_scale: float,
+):
+    if result["resolved"] or result["partial_taken"]:
+        return
+
+    qty = max(0.0, position_size * partial_scale)
+    if direction == TradeDirection.LONG:
+        gross = (exit_price - entry_price) * qty
+    else:
+        gross = (entry_price - exit_price) * qty
+
+    part_commission = commission * partial_scale
+    result["partial_taken"] = True
+    result["partial_time"] = exit_time
+    result["partial_price"] = exit_price
+    result["partial_pnl"] = round(gross - part_commission, 4)

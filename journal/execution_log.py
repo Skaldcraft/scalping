@@ -22,6 +22,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import pandas as pd
+
 from data.models import SessionSummary, TradeResult
 
 log = logging.getLogger(__name__)
@@ -82,6 +84,8 @@ def generate_execution_log(
         sorted(rejection_counts.items(), key=lambda x: x[1], reverse=True)
     )
 
+    gate_status_counts = _build_gate_status_counts(log_entries)
+
     output = {
         "meta": {
             "utility":          "Precision Scalping Utility",
@@ -105,6 +109,7 @@ def generate_execution_log(
             "manipulation_sessions":    manip,
             "manipulation_rate_pct":    round(manip / total * 100, 1) if total else 0,
             "rejection_reason_counts":  rejection_counts,
+            "gate_status_counts":       gate_status_counts,
         },
         "sessions": log_entries,
     }
@@ -113,9 +118,13 @@ def generate_execution_log(
     with open(path, "w", encoding="utf-8") as f:
         json.dump(output, f, indent=2, default=str)
 
+    diagnostics_rows = _build_diagnostics_rows(log_entries)
+    diagnostics_path = run_dir / "execution_diagnostics.csv"
+    pd.DataFrame(diagnostics_rows).to_csv(diagnostics_path, index=False)
+
     log.info(
-        "Execution log saved: %s (%d sessions, %d trades)",
-        path, total, executed,
+        "Execution log saved: %s (%d sessions, %d trades). Diagnostics: %s",
+        path, total, executed, diagnostics_path,
     )
     return path
 
@@ -125,6 +134,8 @@ def generate_execution_log(
 # ---------------------------------------------------------------------------
 
 def _build_entry(s: SessionSummary, trade_index: Dict[str, TradeResult]) -> dict:
+    gate_trace = _build_gate_trace(s)
+
     entry = {
         "session_date":          s.session_date,
         "instrument":            s.instrument,
@@ -142,7 +153,11 @@ def _build_entry(s: SessionSummary, trade_index: Dict[str, TradeResult]) -> dict
             "breakout_fired":    s.breakout_signal_fired,
             "retest_confirmed":  s.retest_confirmed,
             "pattern_confirmed": s.pattern_confirmed,
+            "trend_aligned":     s.trend_aligned,
+            "dxy_filter_confirmed": s.dxy_filter_confirmed,
+            "trigger_candle":    s.trigger_candle,
         },
+        "decision_trace":        gate_trace,
         "trade_executed":        s.trade_executed,
         "rejection_reasons":     s.rejection_reasons,
         "trade_id":              s.trade_id,
@@ -159,6 +174,11 @@ def _build_entry(s: SessionSummary, trade_index: Dict[str, TradeResult]) -> dict
             "stop_loss":     t.stop_loss,
             "tp_2r":         t.take_profit_2r,
             "tp_3r":         t.take_profit_3r,
+            "one_r_target":  t.one_r_target,
+            "partial_scale_pct": t.partial_scale_pct,
+            "partial_exit_time": t.partial_exit_time,
+            "partial_exit_price": t.partial_exit_price,
+            "stop_moved_to_be": t.stop_moved_to_be,
             "pattern":       t.pattern_detected,
             "exit_reason":   t.exit_reason,
             "outcome_2r":    t.outcome_2r,
@@ -168,3 +188,105 @@ def _build_entry(s: SessionSummary, trade_index: Dict[str, TradeResult]) -> dict
         }
 
     return entry
+
+
+def _build_gate_trace(s: SessionSummary) -> List[dict]:
+    reasons = s.rejection_reasons or []
+
+    def _failed_exact(reason: str) -> bool:
+        return reason in reasons
+
+    def _failed_prefix(prefix: str) -> bool:
+        return any(r.startswith(prefix) for r in reasons)
+
+    trace = [
+        {
+            "order": 1,
+            "gate": "safety_lock",
+            "status": "failed" if _failed_exact("circuit_breaker_active") else "passed",
+            "detail": "daily loss and global breaker checks",
+        },
+        {
+            "order": 2,
+            "gate": "trend_alignment",
+            "status": "failed" if _failed_prefix("trend_not_aligned") else ("passed" if s.trend_aligned else "skipped"),
+            "detail": "1m EMA100 + 5m/15m EMA20/50 direction agreement",
+        },
+        {
+            "order": 3,
+            "gate": "dxy_filter",
+            "status": "failed" if _failed_prefix("dxy_filter_rejected") else ("passed" if s.dxy_filter_confirmed else "skipped"),
+            "detail": "external DXY correlation filter for mapped forex pairs",
+        },
+        {
+            "order": 4,
+            "gate": "trigger_candle",
+            "status": "passed" if bool(s.trigger_candle) else "skipped",
+            "detail": s.trigger_candle or "no trigger recorded",
+        },
+        {
+            "order": 5,
+            "gate": "fibonacci_zone",
+            "status": "failed" if _failed_exact("outside_fib_zone") else "passed",
+            "detail": "cheap-zone buys and expensive-zone sells",
+        },
+        {
+            "order": 6,
+            "gate": "execution",
+            "status": "passed" if s.trade_executed else "failed",
+            "detail": "trade submitted only when all required gates pass",
+        },
+    ]
+
+    return trace
+
+
+def _build_gate_status_counts(log_entries: List[dict]) -> Dict[str, Dict[str, int]]:
+    gate_counts: Dict[str, Dict[str, int]] = {}
+    for e in log_entries:
+        for gate in e.get("decision_trace", []):
+            gate_name = str(gate.get("gate", "unknown"))
+            status = str(gate.get("status", "unknown"))
+            gate_counts.setdefault(gate_name, {"passed": 0, "failed": 0, "skipped": 0, "unknown": 0})
+            if status not in gate_counts[gate_name]:
+                gate_counts[gate_name][status] = 0
+            gate_counts[gate_name][status] += 1
+
+    for gate_name, counts in gate_counts.items():
+        gate_counts[gate_name] = dict(sorted(counts.items(), key=lambda kv: kv[0]))
+
+    return dict(sorted(gate_counts.items(), key=lambda kv: kv[0]))
+
+
+def _build_diagnostics_rows(log_entries: List[dict]) -> List[dict]:
+    rows: List[dict] = []
+    for e in log_entries:
+        row = {
+            "session_date": e.get("session_date"),
+            "instrument": e.get("instrument"),
+            "trade_executed": e.get("trade_executed", False),
+            "trade_id": e.get("trade_id"),
+            "mode_activated": (e.get("phase_1") or {}).get("mode_activated"),
+            "trigger_candle": (e.get("phase_1") or {}).get("trigger_candle"),
+            "rejection_reasons": "; ".join(e.get("rejection_reasons", [])),
+        }
+
+        for gate in e.get("decision_trace", []):
+            gate_name = str(gate.get("gate", "unknown"))
+            row[f"gate_{gate_name}"] = gate.get("status")
+
+        trade_detail = e.get("trade_detail") or {}
+        row["direction"] = trade_detail.get("direction")
+        row["entry_price"] = trade_detail.get("entry_price")
+        row["stop_loss"] = trade_detail.get("stop_loss")
+        row["tp_2r"] = trade_detail.get("tp_2r")
+        row["tp_3r"] = trade_detail.get("tp_3r")
+        row["one_r_target"] = trade_detail.get("one_r_target")
+        row["partial_scale_pct"] = trade_detail.get("partial_scale_pct")
+        row["partial_exit_time"] = trade_detail.get("partial_exit_time")
+        row["partial_exit_price"] = trade_detail.get("partial_exit_price")
+        row["stop_moved_to_be"] = trade_detail.get("stop_moved_to_be")
+
+        rows.append(row)
+
+    return rows

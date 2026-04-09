@@ -23,9 +23,42 @@ opening_range:
   candle_size_minutes: 15          # 5 or 15 — user-selectable
 
 strategy:
+  execution_timeframe_minutes: 1   # Signal scan/entries on 1-minute bars
   atr_period:                14    # Lookback period for ATR calculation
   manipulation_threshold_pct: 25.0 # OR range >= this % of ATR → manipulation mode
   reward_ratios: [2, 3]            # Both targets tracked and compared
+  use_heikin_ashi: false           # Optional smoothing for trigger-strength checks
+  require_trend_alignment: true
+  fibonacci_zone_filter: true
+  reversal_touch_and_turn_tp: true
+  reversal_tp_level: 0.382
+  dynamic_stop:
+    enabled: true
+    atr_period_1m: 14
+    atr_multiplier: 1.75          # Valid working range: 1.5 - 2.0
+  partial_profit:
+    enabled: true
+    first_scale_ratio: 1.0        # 1R partial at 50%
+    first_scale_pct: 50.0
+    move_stop_to_breakeven: true
+  multi_timeframe:
+    enabled: true
+    ema_1m_period: 100
+    ema_5m_fast: 20
+    ema_5m_slow: 50
+    ema_15m_fast: 20
+    ema_15m_slow: 50
+    require_ha_no_opposite_wick: true
+  external_bias:
+    dxy_filter_enabled: true
+    dxy_symbol: "DX-Y.NYB"
+    apply_to_pairs:
+      - EURUSD
+      - EURUSD=X
+      - GBPUSD
+      - GBPUSD=X
+    ema_fast: 20
+    ema_slow: 50
   trend_mode:
     allow_displacement_gap_entry: true
     # retest_first | gap_first

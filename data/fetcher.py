@@ -195,19 +195,27 @@ def fetch_intraday_chunked(
     import math
     from datetime import timedelta
 
+    interval_norm = interval.strip().lower()
+    effective_chunk_days = chunk_days
+    if interval_norm == "1m":
+        # Yahoo currently limits 1m requests to short windows.
+        effective_chunk_days = min(chunk_days, 7)
+    elif interval_norm in ("5m", "15m"):
+        effective_chunk_days = min(chunk_days, 58)
+
     delta = (end - start).days
-    if delta <= chunk_days:
+    if delta <= effective_chunk_days:
         return fetch_intraday(symbol, interval, start, end)
 
     chunks = []
-    n_chunks = math.ceil(delta / chunk_days)
+    n_chunks = math.ceil(delta / effective_chunk_days)
     log.info(
         "[%s] Date range (%d days) split into %d chunks of %d days.",
-        symbol, delta, n_chunks, chunk_days,
+        symbol, delta, n_chunks, effective_chunk_days,
     )
     chunk_start = start
     while chunk_start < end:
-        chunk_end = min(chunk_start + pd.Timedelta(days=chunk_days), end)
+        chunk_end = min(chunk_start + pd.Timedelta(days=effective_chunk_days), end)
         try:
             chunk = fetch_intraday(symbol, interval, chunk_start, chunk_end)
             chunks.append(chunk)

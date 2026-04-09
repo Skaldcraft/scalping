@@ -1609,6 +1609,54 @@ def build_shared_review_language(
 
 
 def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, exec_log_path):
+    def _render_execution_diagnostics(exec_path: Path):
+        if not exec_path or not exec_path.exists():
+            return
+
+        try:
+            payload = json.loads(exec_path.read_text(encoding="utf-8"))
+        except Exception:
+            st.warning("Execution diagnostics could not be loaded.")
+            return
+
+        st.subheader("Execution Diagnostics")
+
+        gate_counts = ((payload.get("aggregate") or {}).get("gate_status_counts") or {})
+        if gate_counts:
+            gate_rows = []
+            for gate_name, counts in gate_counts.items():
+                gate_rows.append({
+                    "Gate": gate_name,
+                    "Passed": int(counts.get("passed", 0)),
+                    "Failed": int(counts.get("failed", 0)),
+                    "Skipped": int(counts.get("skipped", 0)),
+                    "Unknown": int(counts.get("unknown", 0)),
+                })
+            st.caption("Gate pass/fail summary")
+            st.dataframe(pd.DataFrame(gate_rows), width="stretch", hide_index=True)
+
+        sessions = payload.get("sessions", []) or []
+        if sessions:
+            session_rows = []
+            for s in sessions:
+                row = {
+                    "Date": s.get("session_date"),
+                    "Instrument": s.get("instrument"),
+                    "Mode": ((s.get("phase_1") or {}).get("mode_activated") or "").replace("_", " ").title(),
+                    "Trigger": (s.get("phase_1") or {}).get("trigger_candle") or "—",
+                    "Trade Executed": bool(s.get("trade_executed", False)),
+                    "Rejection Reasons": "; ".join(s.get("rejection_reasons", []) or []),
+                }
+
+                for gate in s.get("decision_trace", []) or []:
+                    gate_name = str(gate.get("gate", "")).replace("_", " ").title()
+                    row[f"Gate: {gate_name}"] = gate.get("status", "")
+
+                session_rows.append(row)
+
+            st.caption("Session-level decision trace")
+            st.dataframe(pd.DataFrame(session_rows), width="stretch", height=320)
+
     all_trades = [
         t for trades in result.instrument_results.values() for t in trades
     ]
@@ -1634,6 +1682,18 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
 
         for w in result.validation_warnings:
             st.warning(w)
+
+        _render_execution_diagnostics(exec_log_path)
+
+        diagnostics_csv = recorder.directory / "execution_diagnostics.csv"
+        if diagnostics_csv.exists():
+            st.download_button(
+                "Execution Diagnostics (CSV)",
+                data=diagnostics_csv.read_bytes(),
+                file_name="execution_diagnostics.csv",
+                mime="text/csv",
+                key="download_exec_diagnostics_no_trade",
+            )
         return
 
     comparison = compare_targets(all_trades, cfg["account"]["starting_capital"])
@@ -1811,7 +1871,7 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
         st.dataframe(filtered, width="stretch", height=400)
 
     st.subheader("Download Results")
-    dl1, dl2, dl3 = st.columns(3)
+    dl1, dl2, dl3, dl4 = st.columns(4)
     trade_log_path = recorder.directory / "trade_log.csv"
     if trade_log_path.exists():
         dl1.download_button(
@@ -1839,6 +1899,18 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
             mime="application/json",
             key="download_exec_log",
         )
+
+    diagnostics_csv = recorder.directory / "execution_diagnostics.csv"
+    if diagnostics_csv.exists():
+        dl4.download_button(
+            "Execution Diagnostics (CSV)",
+            data=diagnostics_csv.read_bytes(),
+            file_name="execution_diagnostics.csv",
+            mime="text/csv",
+            key="download_exec_diagnostics",
+        )
+
+    _render_execution_diagnostics(exec_log_path)
 
     selection_json = recorder.directory / "selection_snapshot.json"
     selection_csv = recorder.directory / "selection_snapshot.csv"

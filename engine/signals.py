@@ -196,6 +196,47 @@ def _body_pct(bar: pd.Series) -> float:
     return (_body_size(bar) / tr) if tr > 0 else 0.0
 
 
+def _is_opposite_color(bar: pd.Series, direction: TradeDirection) -> bool:
+    if direction == TradeDirection.LONG:
+        return bar["close"] < bar["open"]
+    return bar["close"] > bar["open"]
+
+
+def _is_clean_pullback(
+    prev2: pd.Series,
+    prev1: pd.Series,
+    direction: TradeDirection,
+) -> bool:
+    return _is_opposite_color(prev2, direction) and _is_opposite_color(prev1, direction)
+
+
+def _is_high_volume_doji(current: pd.Series, prev1: pd.Series, prev2: pd.Series) -> bool:
+    tr = _total_range(current)
+    if tr <= 0:
+        return False
+
+    body = _body_size(current)
+    upper_wick = current["high"] - max(current["open"], current["close"])
+    lower_wick = min(current["open"], current["close"]) - current["low"]
+
+    # Doji-like structure: small body with two meaningful wicks.
+    is_doji = (body / tr <= 0.25) and (upper_wick / tr >= 0.25) and (lower_wick / tr >= 0.25)
+    if not is_doji:
+        return False
+
+    # "High volume" proxy when real volume is unavailable/redundant:
+    # candle range must exceed at least one of the two previous ranges.
+    return tr > min(_total_range(prev1), _total_range(prev2))
+
+
+def _has_no_opposite_wick(bar: pd.Series, direction: TradeDirection, tol: float = 1e-9) -> bool:
+    body_low = min(bar["open"], bar["close"])
+    body_high = max(bar["open"], bar["close"])
+    if direction == TradeDirection.LONG:
+        return abs(body_low - bar["low"]) <= tol
+    return abs(bar["high"] - body_high) <= tol
+
+
 def _is_qualified_gap(
     prior: pd.Series,
     current: pd.Series,
@@ -249,6 +290,9 @@ def detect_breakout_signal(
     bars: pd.DataFrame,
     opening_range: OpeningRange,
     session_end_time,
+    eval_bars: Optional[pd.DataFrame] = None,
+    require_high_volume_doji: bool = True,
+    require_no_opposite_wick: bool = False,
     allow_displacement_gap_entry: bool = False,
     entry_priority: str = "retest_first",
     displacement_min_atr_pct: float = 0.0,
@@ -269,6 +313,11 @@ def detect_breakout_signal(
 
     breakout_direction: Optional[TradeDirection] = None
     breakout_bar_time  = None
+    retest_seen = False
+    trigger_name = None
+
+    if eval_bars is None:
+        eval_bars = bars
 
     use_gap_first = entry_priority == "gap_first"
 
@@ -279,6 +328,7 @@ def detect_breakout_signal(
         signal_time,
         retest_detected: bool,
         displacement_detected: bool,
+        trigger_candle: Optional[str] = None,
     ) -> Optional[SignalContext]:
         sl = opening_range.midpoint
         if direction == TradeDirection.LONG:
@@ -311,6 +361,7 @@ def detect_breakout_signal(
             retest_detected=retest_detected,
             displacement_detected=displacement_detected,
             breakout_candle_time=breakout_bar_time,
+            trigger_candle=trigger_candle,
         )
 
     prev_bar = None
@@ -360,44 +411,110 @@ def detect_breakout_signal(
             if gap_qualified:
                 next_idx = bars.index.get_loc(ts) + 1
                 if next_idx < len(bars):
-                    entry_bar = bars.iloc[next_idx]
-                    entry_price = float(entry_bar["open"])
+                    entry_price = float(bar["close"])
                     sig = _build_breakout_signal(
                         ts=ts,
                         direction=breakout_direction,
                         entry_price=entry_price,
-                        signal_time=entry_bar.name.to_pydatetime(),
+                        signal_time=ts.to_pydatetime(),
                         retest_detected=False,
                         displacement_detected=True,
+                        trigger_candle="displacement_gap",
                     )
                     if sig is not None:
                         prev_bar = bar
                         return sig
 
         # --- Step 3B: Detect valid retest ---
-        if breakout_direction == TradeDirection.LONG:
-            if _is_valid_retest_long(bar, or_high):
-                # Entry is on the NEXT bar
-                next_idx = bars.index.get_loc(ts) + 1
-                if next_idx >= len(bars):
-                    log.debug("  Retest LONG confirmed but no next bar available.")
-                    prev_bar = bar
-                    continue
-                entry_bar = bars.iloc[next_idx]
-                entry_price = float(entry_bar["open"])
-                sig = _build_breakout_signal(
-                    ts=ts,
-                    direction=TradeDirection.LONG,
-                    entry_price=entry_price,
-                    signal_time=entry_bar.name.to_pydatetime(),
-                    retest_detected=True,
-                    displacement_detected=False,
-                )
-                if sig is None:
-                    prev_bar = bar
-                    continue
+        idx = bars.index.get_loc(ts)
+        eval_bar = eval_bars.iloc[idx]
+
+        if breakout_direction == TradeDirection.LONG and _is_valid_retest_long(bar, or_high):
+            retest_seen = True
+
+        if breakout_direction == TradeDirection.SHORT and _is_valid_retest_short(bar, or_low):
+            retest_seen = True
+
+        if (
+            breakout_direction is not None
+            and retest_seen
+            and idx >= 2
+            and require_high_volume_doji
+        ):
+            prev1_eval = eval_bars.iloc[idx - 1]
+            prev2_eval = eval_bars.iloc[idx - 2]
+            if _is_clean_pullback(prev2_eval, prev1_eval, breakout_direction):
+                if _is_high_volume_doji(eval_bar, prev1_eval, prev2_eval):
+                    confirmed = True
+                    if require_no_opposite_wick:
+                        next_idx = idx + 1
+                        if next_idx >= len(eval_bars):
+                            confirmed = False
+                        else:
+                            confirmed = _has_no_opposite_wick(
+                                eval_bars.iloc[next_idx], breakout_direction
+                            )
+                    if confirmed:
+                        trigger_name = "high_volume_doji"
+                        entry_price = float(bar["close"])
+                        sig = _build_breakout_signal(
+                            ts=ts,
+                            direction=breakout_direction,
+                            entry_price=entry_price,
+                            signal_time=ts.to_pydatetime(),
+                            retest_detected=True,
+                            displacement_detected=False,
+                            trigger_candle=trigger_name,
+                        )
+                        if sig is not None:
+                            prev_bar = bar
+                            return sig
+
+        if breakout_direction == TradeDirection.SHORT and _is_valid_retest_short(bar, or_low) and not require_high_volume_doji:
+            next_idx = bars.index.get_loc(ts) + 1
+            if next_idx >= len(bars):
                 prev_bar = bar
-                return sig
+                continue
+            entry_bar = bars.iloc[next_idx]
+            entry_price = float(entry_bar["open"])
+            sig = _build_breakout_signal(
+                ts=ts,
+                direction=TradeDirection.SHORT,
+                entry_price=entry_price,
+                signal_time=entry_bar.name.to_pydatetime(),
+                retest_detected=True,
+                displacement_detected=False,
+                trigger_candle="retest",
+            )
+            if sig is None:
+                prev_bar = bar
+                continue
+
+            prev_bar = bar
+            return sig
+
+        if breakout_direction == TradeDirection.LONG and _is_valid_retest_long(bar, or_high) and not require_high_volume_doji:
+            next_idx = bars.index.get_loc(ts) + 1
+            if next_idx >= len(bars):
+                log.debug("  Retest LONG confirmed but no next bar available.")
+                prev_bar = bar
+                continue
+            entry_bar = bars.iloc[next_idx]
+            entry_price = float(entry_bar["open"])
+            sig = _build_breakout_signal(
+                ts=ts,
+                direction=TradeDirection.LONG,
+                entry_price=entry_price,
+                signal_time=entry_bar.name.to_pydatetime(),
+                retest_detected=True,
+                displacement_detected=False,
+                trigger_candle="retest",
+            )
+            if sig is None:
+                prev_bar = bar
+                continue
+            prev_bar = bar
+            return sig
 
         # --- Step 3C: Displacement gap entry (retest-first policy fallback) ---
         if (
@@ -411,21 +528,19 @@ def detect_breakout_signal(
                 atr14, displacement_min_atr_pct, displacement_min_body_pct,
             )
             if gap_qualified:
-                next_idx = bars.index.get_loc(ts) + 1
-                if next_idx < len(bars):
-                    entry_bar = bars.iloc[next_idx]
-                    entry_price = float(entry_bar["open"])
-                    sig = _build_breakout_signal(
-                        ts=ts,
-                        direction=breakout_direction,
-                        entry_price=entry_price,
-                        signal_time=entry_bar.name.to_pydatetime(),
-                        retest_detected=False,
-                        displacement_detected=True,
-                    )
-                    if sig is not None:
-                        prev_bar = bar
-                        return sig
+                entry_price = float(bar["close"])
+                sig = _build_breakout_signal(
+                    ts=ts,
+                    direction=breakout_direction,
+                    entry_price=entry_price,
+                    signal_time=ts.to_pydatetime(),
+                    retest_detected=False,
+                    displacement_detected=True,
+                    trigger_candle="displacement_gap",
+                )
+                if sig is not None:
+                    prev_bar = bar
+                    return sig
 
         if breakout_direction == TradeDirection.SHORT:
             if _is_valid_retest_short(bar, or_low):
@@ -464,6 +579,8 @@ def detect_manipulation_signal(
     opening_range: OpeningRange,
     initial_direction: TradeDirection,   # direction of the manipulation spike
     session_end_time,
+    require_full_body_outside: bool = True,
+    require_extreme_boundary: bool = True,
 ) -> Optional[SignalContext]:
     """
     After a manipulation candle is flagged, scan for a reversal candlestick
@@ -485,11 +602,24 @@ def detect_manipulation_signal(
         if ts.time() >= session_end_time:
             break
 
-        # Pattern must form OUTSIDE the opening range
-        bar_is_outside = (bar["close"] > or_high) or (bar["close"] < or_low)
+        # Pattern must CLOSE completely outside the opening range.
+        if require_full_body_outside:
+            bar_is_outside = (min(bar["open"], bar["close"]) > or_high) or (
+                max(bar["open"], bar["close"]) < or_low
+            )
+        else:
+            bar_is_outside = (bar["close"] > or_high) or (bar["close"] < or_low)
         if not bar_is_outside:
             prev_bar = bar
             continue
+
+        if require_extreme_boundary:
+            if reversal_direction == TradeDirection.SHORT and bar["high"] < or_high:
+                prev_bar = bar
+                continue
+            if reversal_direction == TradeDirection.LONG and bar["low"] > or_low:
+                prev_bar = bar
+                continue
 
         pattern = detect_reversal_pattern(bar, prev_bar)
 
@@ -546,6 +676,7 @@ def detect_manipulation_signal(
                     take_profit_3r=tp3,
                     signal_time=entry_bar.name.to_pydatetime(),
                     pattern_detected=pattern,
+                    trigger_candle=pattern,
                 )
 
         prev_bar = bar
