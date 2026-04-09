@@ -279,14 +279,23 @@ def _compose(
         all_trades=all_trades,
         session_summaries=session_summaries,
         metrics_2r=metrics_2r,
+        config=config,
     )
     lines += [
-        "Current Market Translation:",
-        briefing["translation"],
+        "The Strategy's Pulse:",
+        briefing["strategy_pulse"],
         "",
         "Strategic Focus:",
     ]
-    for line in briefing["focus"]:
+    for line in briefing["strategic_focus"]:
+        lines += [f"  - {line}"]
+
+    lines += ["", "System Standards (Auto-Enforced):"]
+    for line in briefing["system_standards"]:
+        lines += [f"  - {line}"]
+
+    lines += ["", "Dashboard Calibration Recommendations:"]
+    for line in briefing["settings_calibration"]:
         lines += [f"  - {line}"]
 
     lines += ["", "=" * 72, "END OF REPORT", "=" * 72]

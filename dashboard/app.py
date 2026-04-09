@@ -1690,10 +1690,17 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
             all_trades=[],
             session_summaries=result.session_summaries,
             metrics_2r={"profit_factor": None, "win_rate": 0.0, "by_instrument": {}},
+            config=cfg,
         )
-        st.markdown(f"**Current Market Translation**\n\n{briefing['translation']}")
+        st.markdown(f"**The Strategy's Pulse**\n\n{briefing['strategy_pulse']}")
         st.markdown("**Strategic Focus**")
-        for line in briefing["focus"]:
+        for line in briefing["strategic_focus"]:
+            st.write(f"- {line}")
+        st.markdown("**System Standards (Auto-Enforced)**")
+        for line in briefing["system_standards"]:
+            st.write(f"- {line}")
+        st.markdown("**Dashboard Calibration Recommendations**")
+        for line in briefing["settings_calibration"]:
             st.write(f"- {line}")
 
         _render_execution_diagnostics(exec_log_path)
@@ -1888,10 +1895,17 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
         all_trades=all_trades,
         session_summaries=result.session_summaries,
         metrics_2r=metrics_2r,
+        config=cfg,
     )
-    st.markdown(f"**Current Market Translation**\n\n{briefing['translation']}")
+    st.markdown(f"**The Strategy's Pulse**\n\n{briefing['strategy_pulse']}")
     st.markdown("**Strategic Focus**")
-    for line in briefing["focus"]:
+    for line in briefing["strategic_focus"]:
+        st.write(f"- {line}")
+    st.markdown("**System Standards (Auto-Enforced)**")
+    for line in briefing["system_standards"]:
+        st.write(f"- {line}")
+    st.markdown("**Dashboard Calibration Recommendations**")
+    for line in briefing["settings_calibration"]:
         st.write(f"- {line}")
 
     st.subheader("Download Results")

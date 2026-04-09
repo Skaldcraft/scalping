@@ -7,7 +7,7 @@ senior strategic briefing for the PulseTrader pilot.
 
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from data.models import SessionSummary, TradeResult
 
@@ -16,6 +16,7 @@ def build_strategic_briefing(
     all_trades: List[TradeResult],
     session_summaries: Dict[str, List[SessionSummary]],
     metrics_2r: dict,
+    config: Optional[dict] = None,
 ) -> dict:
     summaries = [s for v in session_summaries.values() for s in v]
     total_sessions = len(summaries)
@@ -52,16 +53,22 @@ def build_strategic_briefing(
     trend_rate = (trend_aligned_count / len(trend_checked)) if trend_checked else 0.0
 
     if pf is None:
-        pf_clause = "Profit Factor is not yet stable enough to classify the edge."
+        pf_clause = "Profit Factor is still too early to tell if the strategy is hitting its stride yet."
     elif pf < 1.5:
-        pf_clause = f"Profit Factor at {pf:.2f} shows an unrewarding, inefficient tape for our mechanical rules."
+        pf_clause = (
+            f"Profit Factor at {pf:.2f} tells us our wins are not quite covering our losses yet, "
+            "so this tape is still inefficient for our rules."
+        )
     else:
-        pf_clause = f"Profit Factor at {pf:.2f} suggests the institutional footprint is increasingly readable for base-hit execution."
+        pf_clause = (
+            f"Profit Factor at {pf:.2f} suggests the strategy is starting to hit its stride, "
+            "with clearer institutional footprints on the board."
+        )
 
     if 0.47 <= wr <= 0.53:
         wr_clause = (
-            f"Win rate near {wr*100:.1f}% still reflects a coin-flip environment, "
-            "so edge quality is not fully defined yet."
+            f"Win rate near {wr*100:.1f}% still looks like a coin flip, "
+            "which means timing has not locked into a repeatable rhythm yet."
         )
     elif wr > 0.53:
         wr_clause = f"Win rate at {wr*100:.1f}% indicates execution quality is stabilizing above random flow."
@@ -70,13 +77,13 @@ def build_strategic_briefing(
 
     if slingshot_count > displacement_count:
         pattern_clause = (
-            "Homepage behavior is showing more slingshot effect retests than raw displacement, "
-            "which favors patient boundary confirmation over breakout chasing."
+            "The homepage is showing more 'market bouncing off a wall' behavior than 'breaking through a door' behavior, "
+            "so patience around confirmed retests is paying better than chasing first impulses."
         )
     elif displacement_count > slingshot_count:
         pattern_clause = (
-            "The tape is printing more clean 1-minute displacement than retest cycles, "
-            "a sign momentum legs are currently carrying genuine intent."
+            "The tape is printing more 'breaking through a door' moves than bounces, "
+            "which usually means momentum is real and not just noise."
         )
     else:
         pattern_clause = (
@@ -95,7 +102,7 @@ def build_strategic_briefing(
 
     if forex_sessions and dxy_rate >= 0.60:
         dxy_clause = (
-            "DXY context is acting as a directional anchor, and that momentum is creating a cleaner path for forex slingshot continuations."
+            "DXY is acting like a strong current in the river, and that momentum is making forex continuation setups cleaner."
         )
     elif forex_sessions:
         dxy_clause = (
@@ -106,7 +113,7 @@ def build_strategic_briefing(
 
     if trend_rate >= 0.60:
         htf_clause = (
-            "Higher-timeframe alignment is generally supportive, so 1-minute entries are more often trading with the big-picture current."
+            "Higher-timeframe alignment is mostly supportive, so many 1-minute entries are trading with the wind at our back."
         )
     else:
         htf_clause = (
@@ -115,15 +122,15 @@ def build_strategic_briefing(
 
     if manipulation_ratio >= 0.40:
         reversal_clause = (
-            "A meaningful share of sessions are printing overextended opening ranges, which is consistent with liquidity engineering "
-            "before potential intraday flips in individual names."
+            "A large share of sessions are printing overextended opening ranges, which often looks like big banks setting traps "
+            "before an intraday flip."
         )
     else:
         reversal_clause = (
             "Opening ranges are not broadly overextended, so reversal pressure appears selective rather than market-wide."
         )
 
-    translation = " ".join(
+    strategy_pulse = " ".join(
         [
             pf_clause,
             wr_clause,
@@ -132,7 +139,7 @@ def build_strategic_briefing(
             dxy_clause,
             htf_clause,
             reversal_clause,
-            "The strategic posture remains base-hit focused: protect capital while waiting for cleaner liquidity engineering and repeatable structure.",
+            "The mission stays the same: no home runs, just consistent base hits when structure is clean.",
         ]
     )
 
@@ -142,11 +149,11 @@ def build_strategic_briefing(
 
     if slingshot_count >= displacement_count:
         exec_focus = (
-            "Execution focus: favor confirmed retests at range boundaries; in this regime the slingshot effect is delivering cleaner institutional confirmation."
+            "Execution: prioritize the Trend Continuation model by waiting for price to touch the boundary and turn without closing back inside."
         )
     else:
         exec_focus = (
-            "Execution focus: prioritize clean displacement with immediate intent, but only when higher-timeframe alignment is not fighting the move."
+            "Execution: prioritize clean displacement moves, but only when higher-timeframe flow is aligned so momentum is not fighting the bigger picture."
         )
 
     if forex_sessions and dxy_rate >= 0.60:
@@ -162,11 +169,57 @@ def build_strategic_briefing(
             f"Asset focus: keep priority on symbols showing stable footprint this run (current leader: {top_symbol}) and reduce exposure to names trapped in painful chop."
         )
 
-    discipline_focus = (
-        "Discipline focus: keep the 5% circuit-breaker and fixed 1% risk sizing as non-negotiable guardrails until Profit Factor reclaims and holds above 1.5."
+    volatility_focus = (
+        "Volatility check: when opening candles are stretched, treat that as potential trap behavior and respect the 25% ATR manipulation framework before forcing continuation entries."
     )
 
+    standards = [
+        "Risk Protection: The system already enforces position sizing so no single trade risks more than 1% of capital.",
+        "Kill Switch: The system enforces a 5% daily loss limit as a non-negotiable safety baseline.",
+        "Execution Discipline: The base-hit philosophy is always active, prioritizing repeatable small gains over oversized swings.",
+    ]
+
+    atr_threshold = float((config or {}).get("strategy", {}).get("manipulation_threshold_pct", 25.0))
+    risk_pct_cfg = float((config or {}).get("account", {}).get("risk_per_trade_pct", 1.0))
+    daily_loss_cfg = float((config or {}).get("account", {}).get("daily_loss_limit_pct", 5.0))
+
+    if manipulation_ratio < 0.15 and slingshot_count > 0:
+        atr_reco = (
+            "ATR Manipulation Threshold: Consider testing 20% to 22% because reversal behavior appears without frequent manipulation-mode activation."
+        )
+    elif manipulation_ratio >= 0.40 and chop_ratio >= 0.30:
+        atr_reco = (
+            "ATR Manipulation Threshold: Keep 25% for now; large opening traps are present and a looser threshold may invite more fake reversals."
+        )
+    else:
+        atr_reco = (
+            f"ATR Manipulation Threshold: Keep at {atr_threshold:.0f}% while the current trap profile remains mixed."
+        )
+
+    if pf is None or pf < 1.0:
+        risk_reco = (
+            "Risk Per Trade: Keep at 1% or lower until results prove that wins are consistently paying for losses."
+        )
+    else:
+        risk_reco = (
+            f"Risk Per Trade: Maintain around {risk_pct_cfg:.1f}% while edge quality improves, avoiding any increase until Profit Factor stays above 1.5."
+        )
+
+    if chop_ratio >= 0.35:
+        daily_reco = (
+            "Daily Loss Limit: Keep the hard 5% system baseline, and consider a tighter 3% operating cap in choppy sessions to reduce drawdown."
+        )
+    else:
+        daily_reco = (
+            f"Daily Loss Limit: Maintain at {daily_loss_cfg:.0f}% as the standard safety protocol."
+        )
+
     return {
-        "translation": translation,
-        "focus": [exec_focus, asset_focus, discipline_focus],
+        "strategy_pulse": strategy_pulse,
+        "strategic_focus": [exec_focus, asset_focus, volatility_focus],
+        "system_standards": standards,
+        "settings_calibration": [atr_reco, risk_reco, daily_reco],
+        # Backward-compatible keys for older renderers.
+        "translation": strategy_pulse,
+        "focus": [exec_focus, asset_focus, volatility_focus],
     }
