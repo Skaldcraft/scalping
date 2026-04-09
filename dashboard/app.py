@@ -1611,6 +1611,128 @@ def build_shared_review_language(
 
 
 def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, exec_log_path):
+    def _build_briefing(all_trades_payload, metrics_payload):
+        try:
+            return build_strategic_briefing(
+                all_trades=all_trades_payload,
+                session_summaries=result.session_summaries,
+                metrics_2r=metrics_payload,
+                config=cfg,
+            )
+        except TypeError:
+            return build_strategic_briefing(
+                all_trades=all_trades_payload,
+                session_summaries=result.session_summaries,
+                metrics_2r=metrics_payload,
+            )
+
+    def _render_operator_card(briefing_payload):
+        card = briefing_payload.get("operator_card") or {}
+        if not card:
+            return
+
+        keep_symbols = card.get("keep_symbols") or []
+        reduce_symbols = card.get("reduce_symbols") or []
+        standby_symbols = card.get("standby_symbols") or []
+
+        def _symbol_text(symbols):
+            return ", ".join(symbols) if symbols else "None"
+
+        st.subheader("Operator Card")
+
+        st.markdown(
+            """
+            <style>
+            .op-shell {
+                border: 1px solid rgba(120,120,120,0.35);
+                border-radius: 12px;
+                padding: 14px;
+                background: linear-gradient(145deg, rgba(16,24,32,0.05), rgba(16,24,32,0.01));
+            }
+            .op-badge {
+                display: inline-block;
+                padding: 4px 10px;
+                margin-right: 8px;
+                margin-bottom: 8px;
+                border-radius: 999px;
+                font-size: 12px;
+                font-weight: 600;
+            }
+            .op-keep {
+                background: rgba(22,163,74,0.18);
+                color: #166534;
+                border: 1px solid rgba(22,163,74,0.35);
+            }
+            .op-reduce {
+                background: rgba(220,38,38,0.16);
+                color: #991b1b;
+                border: 1px solid rgba(220,38,38,0.30);
+            }
+            .op-standby {
+                background: rgba(217,119,6,0.18);
+                color: #92400e;
+                border: 1px solid rgba(217,119,6,0.32);
+            }
+            .op-slider-box {
+                border: 1px solid rgba(120,120,120,0.28);
+                border-radius: 10px;
+                padding: 10px 12px;
+                margin-bottom: 8px;
+                background: rgba(255,255,255,0.02);
+            }
+            .op-slider-title {
+                font-size: 12px;
+                color: #5b6470;
+                text-transform: uppercase;
+                letter-spacing: 0.03em;
+                margin-bottom: 4px;
+            }
+            .op-slider-value {
+                font-size: 14px;
+                font-weight: 600;
+                color: #1f2937;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Best Model", card.get("execution_model") or "N/A")
+        m2.metric("Keep", str(len(keep_symbols)))
+        m3.metric("Reduce", str(len(reduce_symbols)))
+        m4.metric("Standby", str(len(standby_symbols)))
+
+        st.markdown(
+            (
+                '<div class="op-shell">'
+                f'<span class="op-badge op-keep">KEEP: {_symbol_text(keep_symbols)}</span>'
+                f'<span class="op-badge op-reduce">REDUCE: {_symbol_text(reduce_symbols)}</span>'
+                f'<span class="op-badge op-standby">STANDBY: {_symbol_text(standby_symbols)}</span>'
+                '</div>'
+            ),
+            unsafe_allow_html=True,
+        )
+
+        st.markdown("**Slider Recommendations**")
+        st.markdown(
+            (
+                '<div class="op-slider-box">'
+                '<div class="op-slider-title">ATR Stop</div>'
+                f'<div class="op-slider-value">{card.get("atr_recommendation", "N/A")}</div>'
+                '</div>'
+                '<div class="op-slider-box">'
+                '<div class="op-slider-title">Risk Per Trade</div>'
+                f'<div class="op-slider-value">{card.get("risk_recommendation", "N/A")}</div>'
+                '</div>'
+                '<div class="op-slider-box">'
+                '<div class="op-slider-title">Daily Loss Limit</div>'
+                f'<div class="op-slider-value">{card.get("daily_loss_recommendation", "N/A")}</div>'
+                '</div>'
+            ),
+            unsafe_allow_html=True,
+        )
+
     def _render_execution_diagnostics(exec_path: Path):
         if not exec_path or not exec_path.exists():
             return
@@ -1663,7 +1785,12 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
         t for trades in result.instrument_results.values() for t in trades
     ]
 
+    empty_metrics = {"profit_factor": None, "win_rate": 0.0, "by_instrument": {}}
+
     if not all_trades:
+        briefing = _build_briefing(all_trades_payload=[], metrics_payload=empty_metrics)
+        _render_operator_card(briefing)
+
         reason_counts = {}
         for summaries in result.session_summaries.values():
             for summary in summaries:
@@ -1686,12 +1813,6 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
             st.warning(w)
 
         st.subheader("Strategic Briefing")
-        briefing = build_strategic_briefing(
-            all_trades=[],
-            session_summaries=result.session_summaries,
-            metrics_2r={"profit_factor": None, "win_rate": 0.0, "by_instrument": {}},
-            config=cfg,
-        )
         st.markdown(f"**The Strategy's Pulse**\n\n{briefing['strategy_pulse']}")
         st.markdown("**Strategic Focus**")
         for line in briefing["strategic_focus"]:
@@ -1702,6 +1823,10 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
         st.markdown("**Dashboard Calibration Recommendations**")
         for line in briefing["settings_calibration"]:
             st.write(f"- {line}")
+        if briefing.get("equity_actions"):
+            st.markdown("**Equities Requiring Action**")
+            for line in briefing["equity_actions"]:
+                st.write(f"- {line}")
 
         _render_execution_diagnostics(exec_log_path)
 
@@ -1719,6 +1844,9 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
     comparison = compare_targets(all_trades, cfg["account"]["starting_capital"])
     metrics_2r = comparison["2r"]
     metrics_3r = comparison["3r"]
+    briefing = _build_briefing(all_trades_payload=all_trades, metrics_payload=metrics_2r)
+
+    _render_operator_card(briefing)
 
     if result.validation_warnings:
         with st.expander("Data Validation Warnings"):
@@ -1891,12 +2019,6 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
         st.dataframe(filtered, width="stretch", height=400)
 
     st.subheader("Strategic Briefing")
-    briefing = build_strategic_briefing(
-        all_trades=all_trades,
-        session_summaries=result.session_summaries,
-        metrics_2r=metrics_2r,
-        config=cfg,
-    )
     st.markdown(f"**The Strategy's Pulse**\n\n{briefing['strategy_pulse']}")
     st.markdown("**Strategic Focus**")
     for line in briefing["strategic_focus"]:
@@ -1907,6 +2029,10 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
     st.markdown("**Dashboard Calibration Recommendations**")
     for line in briefing["settings_calibration"]:
         st.write(f"- {line}")
+    if briefing.get("equity_actions"):
+        st.markdown("**Equities Requiring Action**")
+        for line in briefing["equity_actions"]:
+            st.write(f"- {line}")
 
     st.subheader("Download Results")
     dl1, dl2, dl3, dl4 = st.columns(4)

@@ -1,7 +1,7 @@
 {
   "start_date": "2026-04-01",
-  "end_date": "2026-04-09",
-  "pre_session_enabled": true,
+  "end_date": "2026-04-08",
+  "pre_session_enabled": false,
   "selector_top_n": 4,
   "freeze_daily": true,
   "pf_missing_policy": "allow",

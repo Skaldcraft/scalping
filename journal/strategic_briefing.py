@@ -24,6 +24,16 @@ def build_strategic_briefing(
     def _get(s, attr: str, default):
         return getattr(s, attr, default)
 
+    def _is_equity_symbol(sym: str) -> bool:
+        s = sym.upper().strip()
+        if not s:
+            return False
+        if s in {"SPY", "QQQ"}:
+            return False
+        if "=X" in s or "/" in s:
+            return False
+        return True
+
     pf = metrics_2r.get("profit_factor")
     wr = float(metrics_2r.get("win_rate", 0.0))
 
@@ -147,14 +157,49 @@ def build_strategic_briefing(
     sorted_syms = sorted(by_instrument.items(), key=lambda kv: kv[1].get("net_pnl", 0), reverse=True)
     top_symbol = sorted_syms[0][0] if sorted_syms else "N/A"
 
+    traced_equities = sorted(
+        {str(_get(s, "instrument", "")).upper() for s in summaries if _is_equity_symbol(str(_get(s, "instrument", "")))}
+    )
+
+    equity_actions: list[str] = []
+    keep_symbols: list[str] = []
+    reduce_symbols: list[str] = []
+    standby_symbols: list[str] = []
+    for sym in traced_equities:
+        sym_rows = [s for s in summaries if str(_get(s, "instrument", "")).upper() == sym]
+        sym_reasons = [r for s in sym_rows for r in (_get(s, "rejection_reasons", []) or [])]
+        trend_mismatch = sum(1 for r in sym_reasons if str(r).startswith("trend_not_aligned"))
+        no_signal = sum(1 for r in sym_reasons if str(r) == "no_signal_found")
+        sym_stats = by_instrument.get(sym, {})
+        sym_pnl = float(sym_stats.get("net_pnl", 0.0) or 0.0)
+
+        if trend_mismatch > 0:
+            equity_actions.append(f"{sym}: De-prioritize until higher-timeframe alignment returns.")
+            reduce_symbols.append(sym)
+        elif no_signal > 0 and sym_pnl <= 0:
+            equity_actions.append(f"{sym}: Watch only; avoid forcing entries in chop.")
+            standby_symbols.append(sym)
+        elif sym_pnl > 0:
+            equity_actions.append(f"{sym}: Keep in active rotation; structure is holding.")
+            keep_symbols.append(sym)
+        else:
+            equity_actions.append(f"{sym}: Monitor for clean retest confirmation before activation.")
+            standby_symbols.append(sym)
+
+    traced_line = (
+        "Traced equities: " + (", ".join(traced_equities) if traced_equities else "none in this sample")
+    )
+
     if slingshot_count >= displacement_count:
         exec_focus = (
             "Execution: prioritize the Trend Continuation model by waiting for price to touch the boundary and turn without closing back inside."
         )
+        execution_model = "Trend Continuation (Slingshot Retest)"
     else:
         exec_focus = (
             "Execution: prioritize clean displacement moves, but only when higher-timeframe flow is aligned so momentum is not fighting the bigger picture."
         )
+        execution_model = "Displacement Continuation"
 
     if forex_sessions and dxy_rate >= 0.60:
         asset_focus = (
@@ -216,10 +261,20 @@ def build_strategic_briefing(
 
     return {
         "strategy_pulse": strategy_pulse,
-        "strategic_focus": [exec_focus, asset_focus, volatility_focus],
+        "strategic_focus": [exec_focus, asset_focus, volatility_focus, traced_line],
         "system_standards": standards,
         "settings_calibration": [atr_reco, risk_reco, daily_reco],
+        "equity_actions": equity_actions,
+        "operator_card": {
+            "execution_model": execution_model,
+            "keep_symbols": keep_symbols,
+            "reduce_symbols": reduce_symbols,
+            "standby_symbols": standby_symbols,
+            "atr_recommendation": atr_reco,
+            "risk_recommendation": risk_reco,
+            "daily_loss_recommendation": daily_reco,
+        },
         # Backward-compatible keys for older renderers.
         "translation": strategy_pulse,
-        "focus": [exec_focus, asset_focus, volatility_focus],
+        "focus": [exec_focus, asset_focus, volatility_focus, traced_line],
     }

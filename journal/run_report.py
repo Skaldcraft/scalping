@@ -275,12 +275,19 @@ def _compose(
     # ------------------------------------------------------------------
     lines += ["8. STRATEGIC BRIEFING", "-" * 40]
 
-    briefing = build_strategic_briefing(
-        all_trades=all_trades,
-        session_summaries=session_summaries,
-        metrics_2r=metrics_2r,
-        config=config,
-    )
+    try:
+        briefing = build_strategic_briefing(
+            all_trades=all_trades,
+            session_summaries=session_summaries,
+            metrics_2r=metrics_2r,
+            config=config,
+        )
+    except TypeError:
+        briefing = build_strategic_briefing(
+            all_trades=all_trades,
+            session_summaries=session_summaries,
+            metrics_2r=metrics_2r,
+        )
     lines += [
         "The Strategy's Pulse:",
         briefing["strategy_pulse"],
@@ -297,6 +304,11 @@ def _compose(
     lines += ["", "Dashboard Calibration Recommendations:"]
     for line in briefing["settings_calibration"]:
         lines += [f"  - {line}"]
+
+    if briefing.get("equity_actions"):
+        lines += ["", "Equities Requiring Action:"]
+        for line in briefing["equity_actions"]:
+            lines += [f"  - {line}"]
 
     lines += ["", "=" * 72, "END OF REPORT", "=" * 72]
 

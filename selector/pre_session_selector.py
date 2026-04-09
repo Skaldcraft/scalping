@@ -78,7 +78,6 @@ def run_pre_session_selection(
 
     evaluated = []
     eligible = []
-    overlap_signals = pre_cfg.get("overlap_signals", {})
 
     for item in _normalise_universe(cfg):
         symbol = item["symbol"]
@@ -104,9 +103,13 @@ def run_pre_session_selection(
         elif max_spread is not None and spread > max_spread:
             reasons.append("spread_above_threshold")
 
-        overlap_meta = overlap_signals.get(symbol, {}) if isinstance(overlap_signals, dict) else {}
-        manipulation_status = bool(overlap_meta.get("manipulation_status", False))
-        displacement_gap = bool(overlap_meta.get("displacement_gap", False))
+        snapshot = provider.get_signal_snapshot(symbol, as_of_date)
+        manipulation_status = bool(snapshot.get("manipulation_status", False))
+        displacement_gap = bool(snapshot.get("displacement_gap", False))
+        trend_aligned = bool(snapshot.get("trend_aligned", False))
+        opening_range_valid = bool(snapshot.get("opening_range_valid", False))
+        opening_range_pct_atr = snapshot.get("opening_range_pct_atr")
+        spread_atr_ratio = snapshot.get("spread_atr_ratio")
 
         eligible_flag = len(reasons) == 0
 
@@ -117,7 +120,11 @@ def run_pre_session_selection(
             "profit_factor": pf,
             "spread": spread,
             "manipulation_status": manipulation_status,
+            "trend_aligned": trend_aligned,
             "displacement_gap": displacement_gap,
+            "opening_range_valid": opening_range_valid,
+            "opening_range_pct_atr": opening_range_pct_atr,
+            "spread_atr_ratio": spread_atr_ratio,
             "eligible": eligible_flag,
             "reasons": reasons,
         }
@@ -128,14 +135,42 @@ def run_pre_session_selection(
 
     def _sort_key(row: dict):
         manipulation_score = 1 if row.get("manipulation_status") else 0
+        trend_score = 1 if row.get("trend_aligned") else 0
         displacement_score = 1 if row.get("displacement_gap") else 0
-        atr = row["atr14"] if row["atr14"] is not None else float("-inf")
         spread = row["spread"] if row["spread"] is not None else float("inf")
         pf = row["profit_factor"] if row["profit_factor"] is not None else float("-inf")
-        return (-manipulation_score, -displacement_score, spread, -pf, -atr)
+        return (-manipulation_score, -trend_score, -displacement_score, spread, -pf)
+
+    def _apply_asset_mix(ranked_rows: list[dict], n: int) -> list[dict]:
+        if n < 4:
+            return ranked_rows[:n]
+
+        remaining = ranked_rows.copy()
+        selected_rows: list[dict] = []
+
+        def _pick(asset_class: str, count: int):
+            picked = 0
+            i = 0
+            while i < len(remaining) and picked < count:
+                if str(remaining[i].get("asset_class", "")).lower() == asset_class:
+                    selected_rows.append(remaining.pop(i))
+                    picked += 1
+                else:
+                    i += 1
+
+        # Minimum composition for Top-4+ sessions.
+        _pick("index", 1)
+        _pick("equity", 2)
+
+        for row in remaining:
+            if len(selected_rows) >= n:
+                break
+            selected_rows.append(row)
+
+        return selected_rows[:n]
 
     ranked = sorted(eligible, key=_sort_key)
-    selected = ranked[:top_n]
+    selected = _apply_asset_mix(ranked, top_n)
 
     selected_symbols = [row["symbol"] for row in selected]
     selected_set = set(selected_symbols)
@@ -167,10 +202,10 @@ def run_pre_session_selection(
             "spread_missing_policy": spread_missing_policy,
             "overlap_priority": [
                 "manipulation_status",
+                "trend_aligned",
                 "displacement_gap",
                 "spread",
                 "profit_factor",
-                "atr14",
             ],
         },
     }
