@@ -20,27 +20,35 @@ def build_strategic_briefing(
     summaries = [s for v in session_summaries.values() for s in v]
     total_sessions = len(summaries)
 
+    def _get(s, attr: str, default):
+        return getattr(s, attr, default)
+
     pf = metrics_2r.get("profit_factor")
     wr = float(metrics_2r.get("win_rate", 0.0))
 
-    slingshot_count = sum(1 for s in summaries if s.retest_confirmed)
-    displacement_count = sum(1 for s in summaries if (s.trigger_candle or "").lower() == "displacement_gap")
+    slingshot_count = sum(1 for s in summaries if bool(_get(s, "retest_confirmed", False)))
+    displacement_count = sum(
+        1 for s in summaries if str(_get(s, "trigger_candle", "") or "").lower() == "displacement_gap"
+    )
 
-    rejection_text = [r for s in summaries for r in (s.rejection_reasons or [])]
+    rejection_text = [r for s in summaries for r in (_get(s, "rejection_reasons", []) or [])]
     chop_signals = sum(1 for r in rejection_text if r in ("no_signal_found", "invalid_dynamic_stop"))
     chop_ratio = (chop_signals / total_sessions) if total_sessions else 0.0
-    manipulation_sessions = sum(1 for s in summaries if s.manipulation_flagged)
+    manipulation_sessions = sum(1 for s in summaries if bool(_get(s, "manipulation_flagged", False)))
     manipulation_ratio = (manipulation_sessions / total_sessions) if total_sessions else 0.0
 
     forex_pairs = {"EURUSD", "EURUSD=X", "GBPUSD", "GBPUSD=X"}
-    forex_sessions = [s for s in summaries if s.instrument.upper() in forex_pairs]
-    forex_dxy_confirm = sum(1 for s in forex_sessions if s.dxy_filter_confirmed)
+    forex_sessions = [s for s in summaries if str(_get(s, "instrument", "")).upper() in forex_pairs]
+    forex_dxy_confirm = sum(1 for s in forex_sessions if bool(_get(s, "dxy_filter_confirmed", False)))
     dxy_rate = (forex_dxy_confirm / len(forex_sessions)) if forex_sessions else 0.0
 
     trend_checked = [
-        s for s in summaries if s.trade_executed or any(r.startswith("trend_not_aligned") for r in (s.rejection_reasons or []))
+        s
+        for s in summaries
+        if bool(_get(s, "trade_executed", False))
+        or any(r.startswith("trend_not_aligned") for r in (_get(s, "rejection_reasons", []) or []))
     ]
-    trend_aligned_count = sum(1 for s in trend_checked if s.trend_aligned)
+    trend_aligned_count = sum(1 for s in trend_checked if bool(_get(s, "trend_aligned", False)))
     trend_rate = (trend_aligned_count / len(trend_checked)) if trend_checked else 0.0
 
     if pf is None:
