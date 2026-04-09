@@ -156,6 +156,73 @@ class Backtester:
 
         return result
 
+    def _infer_displacement_filter_rejections(
+        self,
+        bars: pd.DataFrame,
+        opening_range: OpeningRange,
+        atr_14: float,
+    ) -> List[str]:
+        """Infer why displacement candidates were filtered out when no breakout signal was produced."""
+        reasons: List[str] = []
+        if bars.empty:
+            return reasons
+
+        or_high = opening_range.high
+        or_low = opening_range.low
+        breakout_direction: Optional[TradeDirection] = None
+        prev_bar = None
+        size_fail = False
+        body_fail = False
+
+        def _body_pct(bar: pd.Series) -> float:
+            tr = float(bar["high"] - bar["low"])
+            if tr <= 0:
+                return 0.0
+            return abs(float(bar["close"] - bar["open"])) / tr
+
+        for ts, bar in bars.iterrows():
+            if ts.time() >= self.session_end_time:
+                break
+
+            if breakout_direction is None:
+                if min(float(bar["open"]), float(bar["close"])) > or_high:
+                    breakout_direction = TradeDirection.LONG
+                    prev_bar = bar
+                    continue
+                if max(float(bar["open"]), float(bar["close"])) < or_low:
+                    breakout_direction = TradeDirection.SHORT
+                    prev_bar = bar
+                    continue
+
+            if breakout_direction is not None and prev_bar is not None:
+                is_gap = (
+                    float(bar["low"]) > float(prev_bar["high"])
+                    if breakout_direction == TradeDirection.LONG
+                    else float(bar["high"]) < float(prev_bar["low"])
+                )
+                if is_gap:
+                    if breakout_direction == TradeDirection.LONG:
+                        gap_size = float(bar["low"] - prev_bar["high"])
+                    else:
+                        gap_size = float(prev_bar["low"] - bar["high"])
+
+                    if self.displacement_min_atr_pct > 0 and atr_14 > 0:
+                        min_gap = (self.displacement_min_atr_pct / 100.0) * atr_14
+                        if gap_size < min_gap:
+                            size_fail = True
+
+                    if self.displacement_min_body_pct > 0:
+                        if _body_pct(bar) < (self.displacement_min_body_pct / 100.0):
+                            body_fail = True
+
+            prev_bar = bar
+
+        if size_fail:
+            reasons.append("displacement_gap_min_size_not_met")
+        if body_fail:
+            reasons.append("displacement_gap_min_body_not_met")
+        return reasons
+
     # ------------------------------------------------------------------
 
     def _build_instrument_list(self) -> dict:
@@ -418,6 +485,14 @@ class Backtester:
                 )
                 if signal is None:
                     rejection_reasons.append("no_signal_found")
+                    if self.allow_displacement_gap_entry:
+                        rejection_reasons.extend(
+                            self._infer_displacement_filter_rejections(
+                                post_bars,
+                                opening_range,
+                                atr_14,
+                            )
+                        )
 
         # ------------------------------------------------------------------
         # No signal

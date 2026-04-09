@@ -187,7 +187,62 @@ def _build_entry(s: SessionSummary, trade_index: Dict[str, TradeResult]) -> dict
             "pnl_3r":        t.pnl_3r,
         }
 
+    entry["reasoning_and_logic"] = _reasoning_and_logic(entry)
+
     return entry
+
+
+def _reasoning_and_logic(entry: dict) -> str:
+    phase0 = entry.get("phase_0") or {}
+    phase1 = entry.get("phase_1") or {}
+    reasons = entry.get("rejection_reasons") or []
+
+    if entry.get("trade_executed"):
+        if bool(phase1.get("retest_confirmed")):
+            return (
+                "The system saw a valid touch-and-turn retest, confirming the Slingshot effect before committing capital."
+            )
+        if str(phase1.get("trigger_candle", "")).lower() == "displacement_gap":
+            return (
+                "The system detected aggressive institutional momentum through a displacement gap and allowed continuation execution."
+            )
+        return (
+            "The session passed the active structure and safety gates, so the system executed within base-hit risk controls."
+        )
+
+    if bool(phase0.get("manipulation_flagged")):
+        return (
+            "The opening range signaled institutional engineering, but the follow-through confirmation was not strong enough for a safe entry."
+        )
+
+    if any(str(r).startswith("trend_not_aligned") for r in reasons):
+        return (
+            "The setup was skipped because the small-timeframe move did not align with the higher-timeframe trend wind at our back."
+        )
+
+    if any(str(r) == "displacement_gap_min_body_not_met" for r in reasons) or any(
+        str(r) == "displacement_gap_min_size_not_met" for r in reasons
+    ):
+        return (
+            "The system detected a potential move, but the footprint was too light: candle body strength or displacement size did not show solid institutional intent."
+        )
+
+    if any(str(r) == "no_signal_found" for r in reasons):
+        return (
+            "The utility stayed patient because no clean trigger appeared; this avoids forced entries during noisy, unrewarding tape."
+        )
+
+    if any(str(r) == "outside_fib_zone" for r in reasons):
+        return (
+            "Price location was outside the preferred value zone, so the setup was filtered to avoid chasing extended conditions."
+        )
+
+    if any(str(r) == "circuit_breaker_active" for r in reasons):
+        return (
+            "The system safety lock was active, so execution was intentionally blocked to protect simulated capital."
+        )
+
+    return "No qualifying setup reached execution quality thresholds during this session."
 
 
 def _build_gate_trace(s: SessionSummary) -> List[dict]:
@@ -269,6 +324,7 @@ def _build_diagnostics_rows(log_entries: List[dict]) -> List[dict]:
             "mode_activated": (e.get("phase_1") or {}).get("mode_activated"),
             "trigger_candle": (e.get("phase_1") or {}).get("trigger_candle"),
             "rejection_reasons": "; ".join(e.get("rejection_reasons", [])),
+            "Reasoning and Logic": e.get("reasoning_and_logic", ""),
         }
 
         for gate in e.get("decision_trace", []):

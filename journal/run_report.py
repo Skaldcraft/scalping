@@ -16,6 +16,7 @@ Output: plain-text file saved to results/<run>/run_report.txt
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
+import csv
 
 from data.models import TradeResult, SessionSummary
 from journal.strategic_briefing import build_strategic_briefing
@@ -38,7 +39,7 @@ def generate_run_report(
     """
     lines = _compose(
         instrument_results, session_summaries, metrics_2r, metrics_3r,
-        circuit_halt_events, config, start_date, end_date, version,
+        circuit_halt_events, config, start_date, end_date, version, run_dir,
     )
 
     path = run_dir / "run_report.txt"
@@ -54,7 +55,7 @@ def generate_run_report(
 
 def _compose(
     instrument_results, session_summaries, metrics_2r, metrics_3r,
-    circuit_halt_events, config, start_date, end_date, version,
+    circuit_halt_events, config, start_date, end_date, version, run_dir,
 ) -> List[str]:
 
     all_trades = [t for trades in instrument_results.values() for t in trades]
@@ -275,12 +276,27 @@ def _compose(
     # ------------------------------------------------------------------
     lines += ["8. STRATEGIC BRIEFING", "-" * 40]
 
+    reasoning_memory: Dict[str, str] = {}
+    diagnostics_csv = Path(run_dir) / "execution_diagnostics.csv"
+    if diagnostics_csv.exists():
+        try:
+            with open(diagnostics_csv, "r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    sym = str(row.get("instrument", "")).strip().upper()
+                    reason = str(row.get("Reasoning and Logic", "")).strip()
+                    if sym and reason and reason.lower() != "nan":
+                        reasoning_memory[sym] = reason
+        except Exception:
+            reasoning_memory = {}
+
     try:
         briefing = build_strategic_briefing(
             all_trades=all_trades,
             session_summaries=session_summaries,
             metrics_2r=metrics_2r,
             config=config,
+            reasoning_memory=reasoning_memory,
         )
     except TypeError:
         briefing = build_strategic_briefing(
@@ -304,6 +320,11 @@ def _compose(
     lines += ["", "Dashboard Calibration Recommendations:"]
     for line in briefing["settings_calibration"]:
         lines += [f"  - {line}"]
+
+    if briefing.get("symbol_reasoning"):
+        lines += ["", "Journal Memory: Reasoning and Logic:"]
+        for sym, reason in briefing["symbol_reasoning"].items():
+            lines += [f"  - {sym}: {reason}"]
 
     if briefing.get("equity_actions"):
         lines += ["", "Equities Requiring Action:"]

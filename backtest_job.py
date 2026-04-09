@@ -139,6 +139,16 @@ def run_backtest_job(
     metrics_2r = comparison["2r"]
     metrics_3r = comparison["3r"]
 
+    exec_log_path = generate_execution_log(
+        session_summaries=result.session_summaries,
+        instrument_results=result.instrument_results,
+        run_dir=recorder.directory,
+        version=version,
+        config=run_cfg,
+        start_date=str(start_date),
+        end_date=str(end_date),
+    )
+
     report_path = generate_run_report(
         instrument_results=result.instrument_results,
         session_summaries=result.session_summaries,
@@ -150,16 +160,6 @@ def run_backtest_job(
         end_date=str(end_date),
         version=version,
         run_dir=recorder.directory,
-    )
-
-    exec_log_path = generate_execution_log(
-        session_summaries=result.session_summaries,
-        instrument_results=result.instrument_results,
-        run_dir=recorder.directory,
-        version=version,
-        config=run_cfg,
-        start_date=str(start_date),
-        end_date=str(end_date),
     )
 
     return {

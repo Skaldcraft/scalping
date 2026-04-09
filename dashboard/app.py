@@ -1611,6 +1611,27 @@ def build_shared_review_language(
 
 
 def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, exec_log_path):
+    def _load_reasoning_memory() -> dict:
+        diagnostics_csv = recorder.directory / "execution_diagnostics.csv"
+        if not diagnostics_csv.exists():
+            return {}
+        try:
+            df = pd.read_csv(diagnostics_csv)
+        except Exception:
+            return {}
+        if "instrument" not in df.columns or "Reasoning and Logic" not in df.columns:
+            return {}
+
+        memory = {}
+        for _, row in df.iterrows():
+            sym = str(row.get("instrument", "")).strip().upper()
+            reason = str(row.get("Reasoning and Logic", "")).strip()
+            if sym and reason and reason.lower() != "nan":
+                memory[sym] = reason
+        return memory
+
+    reasoning_memory = _load_reasoning_memory()
+
     def _build_briefing(all_trades_payload, metrics_payload):
         try:
             return build_strategic_briefing(
@@ -1618,6 +1639,7 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
                 session_summaries=result.session_summaries,
                 metrics_2r=metrics_payload,
                 config=cfg,
+                reasoning_memory=reasoning_memory,
             )
         except TypeError:
             return build_strategic_briefing(
@@ -1644,10 +1666,10 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
             """
             <style>
             .op-shell {
-                border: 1px solid rgba(120,120,120,0.35);
+                border: 1px solid rgba(120,120,120,0.55);
                 border-radius: 12px;
                 padding: 14px;
-                background: linear-gradient(145deg, rgba(16,24,32,0.05), rgba(16,24,32,0.01));
+                background: linear-gradient(145deg, rgba(120,120,120,0.14), rgba(120,120,120,0.06));
             }
             .op-badge {
                 display: inline-block;
@@ -1660,29 +1682,27 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
             }
             .op-keep {
                 background: rgba(22,163,74,0.18);
-                color: #166534;
                 border: 1px solid rgba(22,163,74,0.35);
             }
             .op-reduce {
                 background: rgba(220,38,38,0.16);
-                color: #991b1b;
                 border: 1px solid rgba(220,38,38,0.30);
             }
             .op-standby {
                 background: rgba(217,119,6,0.18);
-                color: #92400e;
                 border: 1px solid rgba(217,119,6,0.32);
             }
             .op-slider-box {
-                border: 1px solid rgba(120,120,120,0.28);
+                border: 1px solid rgba(120,120,120,0.60);
                 border-radius: 10px;
                 padding: 10px 12px;
                 margin-bottom: 8px;
-                background: rgba(255,255,255,0.02);
+                background: rgba(120,120,120,0.14);
             }
             .op-slider-title {
                 font-size: 12px;
-                color: #5b6470;
+                color: inherit;
+                opacity: 0.92;
                 text-transform: uppercase;
                 letter-spacing: 0.03em;
                 margin-bottom: 4px;
@@ -1690,10 +1710,94 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
             .op-slider-value {
                 font-size: 14px;
                 font-weight: 600;
-                color: #1f2937;
+                color: inherit;
+                line-height: 1.4;
+            }
+            .op-state-badge {
+                display: inline-block;
+                padding: 4px 10px;
+                border-radius: 999px;
+                border: 1px solid transparent;
+                font-size: 12px;
+                font-weight: 700;
+                margin-bottom: 8px;
+            }
+            .op-state-confirmed {
+                background: rgba(22,163,74,0.18);
+                border-color: rgba(22,163,74,0.35);
+            }
+            .op-state-balanced {
+                background: rgba(217,119,6,0.18);
+                border-color: rgba(217,119,6,0.32);
+            }
+            .op-state-risk {
+                background: rgba(220,38,38,0.16);
+                border-color: rgba(220,38,38,0.30);
+            }
+            .op-interpret-box {
+                border: 1px solid rgba(120,120,120,0.28);
+                border-radius: 10px;
+                padding: 10px 12px;
+                margin-bottom: 8px;
+                background: rgba(255,255,255,0.02);
+            }
+            .op-tag {
+                display: inline-block;
+                padding: 2px 8px;
+                border-radius: 999px;
+                font-size: 11px;
+                font-weight: 700;
+                margin-bottom: 6px;
+                border: 1px solid transparent;
+                text-transform: uppercase;
+                letter-spacing: 0.02em;
+            }
+            .op-tag-confirmed {
+                background: rgba(22,163,74,0.18);
+                border-color: rgba(22,163,74,0.35);
+            }
+            .op-tag-balanced {
+                background: rgba(217,119,6,0.18);
+                border-color: rgba(217,119,6,0.32);
+            }
+            .op-tag-risk {
+                background: rgba(220,38,38,0.16);
+                border-color: rgba(220,38,38,0.30);
+            }
+            .op-interpret-confirmed {
+                border-color: rgba(22,163,74,0.40);
+                background: rgba(22,163,74,0.08);
+            }
+            .op-interpret-balanced {
+                border-color: rgba(217,119,6,0.40);
+                background: rgba(217,119,6,0.08);
+            }
+            .op-interpret-risk {
+                border-color: rgba(220,38,38,0.36);
+                background: rgba(220,38,38,0.08);
             }
             </style>
             """,
+            unsafe_allow_html=True,
+        )
+
+        execution_interp = str(card.get("execution_interpretation") or "")
+        gap_interp = str(card.get("gap_interpretation") or "")
+        fakeout_interp = str(card.get("fakeout_interpretation") or "")
+        gap_interp_lower = gap_interp.lower()
+
+        if fakeout_interp or "footprint' was too light" in gap_interp_lower:
+            state_label = "Noise / Trap Risk"
+            state_class = "op-state-risk"
+        elif "slingshot effect" in execution_interp.lower():
+            state_label = "Confirmed Slingshot"
+            state_class = "op-state-confirmed"
+        else:
+            state_label = "Balanced Confirmation"
+            state_class = "op-state-balanced"
+
+        st.markdown(
+            f'<span class="op-state-badge {state_class}">Session State: {state_label}</span>',
             unsafe_allow_html=True,
         )
 
@@ -1731,6 +1835,111 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
                 '</div>'
             ),
             unsafe_allow_html=True,
+        )
+
+        interp_rows = []
+        if execution_interp:
+            exec_class = (
+                "op-interpret-confirmed"
+                if "slingshot effect" in execution_interp.lower()
+                else "op-interpret-balanced"
+            )
+            exec_tag = "CONFIRMED" if exec_class == "op-interpret-confirmed" else "CAUTION"
+            exec_tag_class = "op-tag-confirmed" if exec_tag == "CONFIRMED" else "op-tag-balanced"
+            interp_rows.append((execution_interp, exec_class, exec_tag, exec_tag_class))
+        if gap_interp:
+            gap_class = (
+                "op-interpret-risk"
+                if ("too light" in gap_interp_lower or "filter out these traps" in gap_interp_lower)
+                else "op-interpret-balanced"
+            )
+            gap_tag = "RISK" if gap_class == "op-interpret-risk" else "CAUTION"
+            gap_tag_class = "op-tag-risk" if gap_tag == "RISK" else "op-tag-balanced"
+            interp_rows.append((gap_interp, gap_class, gap_tag, gap_tag_class))
+        if fakeout_interp:
+            interp_rows.append((fakeout_interp, "op-interpret-risk", "RISK", "op-tag-risk"))
+
+        if interp_rows:
+            st.markdown("**Session Interpretation**")
+            st.markdown(
+                "".join(
+                    [
+                        f'<div class="op-interpret-box {css_class}">'
+                        f'<div><span class="op-tag {tag_css_class}">{tag_label}</span></div>'
+                        f'<div class="op-slider-value">{line}</div>'
+                        '</div>'
+                        for line, css_class, tag_label, tag_css_class in interp_rows
+                    ]
+                ),
+                unsafe_allow_html=True,
+            )
+
+    def _render_symbol_reasoning(briefing_payload, *, key_suffix: str):
+        reasoning = briefing_payload.get("symbol_reasoning") or {}
+        if not reasoning:
+            return
+
+        st.markdown("**Journal Memory: Reasoning and Logic**")
+        for sym, reason in reasoning.items():
+            st.write(f"- {sym}: {reason}")
+
+        symbols = sorted(reasoning.keys())
+        if not symbols:
+            return
+
+        st.markdown("**Why Was Symbol Skipped?**")
+        chosen = st.selectbox(
+            "Choose a symbol to view its skip/execution explanation",
+            options=symbols,
+            key=f"skip_reason_symbol_{key_suffix}",
+        )
+        st.info(reasoning.get(chosen, "No reasoning available for this symbol in this run."))
+
+    def _build_briefing_document(briefing_payload) -> str:
+        lines = [
+            "Strategic Briefing",
+            "=" * 48,
+            "",
+            "The Strategy's Pulse",
+            briefing_payload.get("strategy_pulse", ""),
+            "",
+            "Strategic Focus",
+        ]
+
+        for line in briefing_payload.get("strategic_focus", []) or []:
+            lines.append(f"- {line}")
+
+        lines += ["", "System Standards (Auto-Enforced)"]
+        for line in briefing_payload.get("system_standards", []) or []:
+            lines.append(f"- {line}")
+
+        lines += ["", "Dashboard Calibration Recommendations"]
+        for line in briefing_payload.get("settings_calibration", []) or []:
+            lines.append(f"- {line}")
+
+        reasoning = briefing_payload.get("symbol_reasoning") or {}
+        if reasoning:
+            lines += ["", "Journal Memory: Reasoning and Logic"]
+            for sym, reason in reasoning.items():
+                lines.append(f"- {sym}: {reason}")
+
+        actions = briefing_payload.get("equity_actions") or []
+        if actions:
+            lines += ["", "Equities Requiring Action"]
+            for line in actions:
+                lines.append(f"- {line}")
+
+        lines += ["", "=" * 48]
+        return "\n".join(lines)
+
+    def _render_briefing_download(briefing_payload, *, key_suffix: str):
+        doc_text = _build_briefing_document(briefing_payload)
+        st.download_button(
+            "Download Strategic Briefing (TXT)",
+            data=doc_text.encode("utf-8"),
+            file_name="strategic_briefing.txt",
+            mime="text/plain",
+            key=f"download_strategic_briefing_{key_suffix}",
         )
 
     def _render_execution_diagnostics(exec_path: Path):
@@ -1813,6 +2022,7 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
             st.warning(w)
 
         st.subheader("Strategic Briefing")
+        _render_briefing_download(briefing, key_suffix="no_trade")
         st.markdown(f"**The Strategy's Pulse**\n\n{briefing['strategy_pulse']}")
         st.markdown("**Strategic Focus**")
         for line in briefing["strategic_focus"]:
@@ -1823,6 +2033,7 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
         st.markdown("**Dashboard Calibration Recommendations**")
         for line in briefing["settings_calibration"]:
             st.write(f"- {line}")
+        _render_symbol_reasoning(briefing, key_suffix="no_trade")
         if briefing.get("equity_actions"):
             st.markdown("**Equities Requiring Action**")
             for line in briefing["equity_actions"]:
@@ -2019,6 +2230,7 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
         st.dataframe(filtered, width="stretch", height=400)
 
     st.subheader("Strategic Briefing")
+    _render_briefing_download(briefing, key_suffix="with_trades")
     st.markdown(f"**The Strategy's Pulse**\n\n{briefing['strategy_pulse']}")
     st.markdown("**Strategic Focus**")
     for line in briefing["strategic_focus"]:
@@ -2029,6 +2241,7 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
     st.markdown("**Dashboard Calibration Recommendations**")
     for line in briefing["settings_calibration"]:
         st.write(f"- {line}")
+    _render_symbol_reasoning(briefing, key_suffix="with_trades")
     if briefing.get("equity_actions"):
         st.markdown("**Equities Requiring Action**")
         for line in briefing["equity_actions"]:
