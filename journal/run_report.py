@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from data.models import TradeResult, SessionSummary
+from journal.strategic_briefing import build_strategic_briefing
 
 
 def generate_run_report(
@@ -271,7 +272,24 @@ def _compose(
     for note in notes:
         lines += [f"  - {note}", ""]
 
-    lines += ["=" * 72, "END OF REPORT", "=" * 72]
+    # ------------------------------------------------------------------
+    lines += ["8. STRATEGIC BRIEFING", "-" * 40]
+
+    briefing = build_strategic_briefing(
+        all_trades=all_trades,
+        session_summaries=session_summaries,
+        metrics_2r=metrics_2r,
+    )
+    lines += [
+        "Current Market Translation:",
+        briefing["translation"],
+        "",
+        "Strategic Focus:",
+    ]
+    for line in briefing["focus"]:
+        lines += [f"  - {line}"]
+
+    lines += ["", "=" * 72, "END OF REPORT", "=" * 72]
 
     return lines
 

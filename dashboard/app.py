@@ -40,6 +40,7 @@ from journal.metrics import compare_targets
 from journal.recorder import JournalRecorder
 from journal.run_report import generate_run_report
 from journal.execution_log import generate_execution_log
+from journal.strategic_briefing import build_strategic_briefing
 from risk.circuit_breaker import CircuitBreaker
 from dashboard.results_manager import (
     delete_items_permanently,
@@ -1282,7 +1283,7 @@ def render_home():
             st.caption("No weekly batch report found yet.")
 
     st.divider()
-    st.write("Use the tabs above to move between `PulseTrader`, `Backtest`, and `How it works`.")
+    st.write("Use the tabs above to move between `PulseTrader`, `Results Manager`, `Backtest`, and `How it works`.")
 
 
 def render_results_manager():
@@ -1497,6 +1498,7 @@ def render_results_manager():
             st.caption("Trash is empty.")
 
 
+
 def build_long_view(results_dir: Path, limit: int = 5) -> dict:
     weekly = build_weekly_long_view(results_dir, weeks=limit)
     return {"recent": weekly["weeks"], "trend": weekly["trend"]}
@@ -1682,6 +1684,17 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
 
         for w in result.validation_warnings:
             st.warning(w)
+
+        st.subheader("Strategic Briefing")
+        briefing = build_strategic_briefing(
+            all_trades=[],
+            session_summaries=result.session_summaries,
+            metrics_2r={"profit_factor": None, "win_rate": 0.0, "by_instrument": {}},
+        )
+        st.markdown(f"**Current Market Translation**\n\n{briefing['translation']}")
+        st.markdown("**Strategic Focus**")
+        for line in briefing["focus"]:
+            st.write(f"- {line}")
 
         _render_execution_diagnostics(exec_log_path)
 
@@ -1870,6 +1883,17 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
 
         st.dataframe(filtered, width="stretch", height=400)
 
+    st.subheader("Strategic Briefing")
+    briefing = build_strategic_briefing(
+        all_trades=all_trades,
+        session_summaries=result.session_summaries,
+        metrics_2r=metrics_2r,
+    )
+    st.markdown(f"**Current Market Translation**\n\n{briefing['translation']}")
+    st.markdown("**Strategic Focus**")
+    for line in briefing["focus"]:
+        st.write(f"- {line}")
+
     st.subheader("Download Results")
     dl1, dl2, dl3, dl4 = st.columns(4)
     trade_log_path = recorder.directory / "trade_log.csv"
@@ -1977,8 +2001,8 @@ def main():
 
     page_labels = {
         "pulse": "🏠 PulseTrader",
-        "backtest": "📊 Backtest",
         "results": "🗂️ Results Manager",
+        "backtest": "📊 Backtest",
         "guide": "📘 How it works",
     }
     page_keys = list(page_labels.keys())
