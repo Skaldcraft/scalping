@@ -22,6 +22,29 @@ def add_ema(df: pd.DataFrame, period: int, source: str = "close", name: str = No
     return out
 
 
+def add_atr(df: pd.DataFrame, period: int = 14, name: str = None) -> pd.DataFrame:
+    """Add an Average True Range (ATR) column to a DataFrame.
+
+    Requires columns: high, low, close.
+    Uses Wilder's smoothing (same as TradingView / MT4).
+    """
+    out = df.copy()
+    col = name or f"atr_{period}"
+    high = out["high"]
+    low = out["low"]
+    prev_close = out["close"].shift(1)
+    tr = pd.concat(
+        [
+            high - low,
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    out[col] = tr.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+    return out
+
+
 def price_ma_deviation(df: pd.DataFrame, ma_col: str = "sma_20") -> pd.Series:
     """Return the absolute price deviation from the MA (close - MA)."""
     return (df["close"] - df[ma_col]).abs()
