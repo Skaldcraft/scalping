@@ -271,134 +271,25 @@ def build_sidebar(default_cfg: dict) -> tuple[dict, date, date]:
         max_value=date.today(),
     )
 
-    st.sidebar.subheader("Universe & Selection")
+
+    st.sidebar.subheader("Equity Selection")
     default_equities = default_cfg["instruments"].get("equities", [])
     tracked_universe = tracked_universe_symbols(default_cfg)
-    pre_cfg = default_cfg.get("pre_session", {}) or {}
-    pre_rules = pre_cfg.get("selection_rules", {}) or {}
+    st.sidebar.caption("All equities in the universe will be analyzed by default. To analyze only specific equities, select them below.")
 
-    pre_session_enabled = st.sidebar.checkbox(
-        "Enable Pre-Session Top-N Selector",
-        value=bool(_prefs.get("pre_session_enabled", pre_cfg.get("enabled", False))),
-        help="When enabled, the run trades only the session selection (Top-N) instead of the full master universe list.",
+
+    # Multi-select for override, always update session state
+    selected_equities = st.sidebar.multiselect(
+        "Select equities to analyze (optional)",
+        options=tracked_universe,
+        default=st.session_state.get("selected_equities", []),
+        help="Leave empty to analyze all equities. Select one or more to override.",
+        key="selected_equities"
     )
-    selector_top_n = st.sidebar.number_input(
-        "Top-N Symbols",
-        min_value=1,
-        max_value=10,
-        value=int(_prefs.get("selector_top_n", pre_cfg.get("top_n", 3))),
-        step=1,
-    )
-    freeze_daily = st.sidebar.checkbox(
-        "Freeze Daily Selection",
-        value=bool(_prefs.get("freeze_daily", pre_cfg.get("freeze_daily_selection", True))),
-        help="Reuses the first computed selection for the same date on subsequent intraday runs.",
-    )
+    # Reset button
+    if st.sidebar.button("Reset selection to all", help="Reset to analyze all equities."):
+        st.session_state["selected_equities"] = []
 
-    pf_missing_policy = st.sidebar.selectbox(
-        "PF Missing Policy",
-        options=["allow", "reject"],
-        index=["allow", "reject"].index(str(_prefs.get("pf_missing_policy", pre_rules.get("pf_missing_policy", "allow")))),
-        help="How to handle symbols with missing Profit Factor history.",
-    )
-    spread_missing_policy = st.sidebar.selectbox(
-        "Spread Missing Policy",
-        options=["allow", "reject"],
-        index=["allow", "reject"].index(str(_prefs.get("spread_missing_policy", pre_rules.get("spread_missing_policy", "allow")))),
-        help="How to handle symbols without spread data.",
-    )
-
-    pf_lookback_trades_raw = st.sidebar.number_input(
-        "PF Lookback Trades (0 = all)",
-        min_value=0,
-        max_value=500,
-        value=int(_prefs.get("pf_lookback_trades_raw", pre_rules.get("pf_lookback_trades") or 0)),
-        step=5,
-    )
-    pf_lookback_trades = None if pf_lookback_trades_raw == 0 else int(pf_lookback_trades_raw)
-
-    with st.sidebar.expander("Legacy Behavior", expanded=False):
-        legacy_require_pf = st.checkbox(
-            "Legacy toggle: require PF history",
-            value=bool(_prefs.get("legacy_require_pf", pre_rules.get("require_pf_history", False))),
-        )
-        legacy_require_spread = st.checkbox(
-            "Legacy toggle: require spread data",
-            value=bool(_prefs.get("legacy_require_spread", pre_rules.get("require_spread_data", False))),
-        )
-
-    st.sidebar.markdown("**Tracked Universe**")
-    if tracked_universe:
-        st.sidebar.caption(", ".join(tracked_universe))
-    else:
-        st.sidebar.caption("No tracked universe configured yet.")
-
-    with st.sidebar.expander("Single Symbol Override", expanded=False):
-        st.caption("Run one tracked symbol for this backtest only. Does not change saved config.")
-        single_symbol_enabled = st.checkbox(
-            "Use one tracked symbol",
-            value=False,
-        )
-        single_symbol_input = st.text_input(
-            "Tracked Symbol",
-            value="",
-            placeholder="AAPL",
-            help="Enter one symbol from the tracked universe shown above.",
-            disabled=not single_symbol_enabled,
-        ).strip().upper()
-        valid_single_symbol = single_symbol_input in tracked_universe if single_symbol_input else False
-        if single_symbol_enabled and single_symbol_input and not valid_single_symbol:
-            st.warning("Symbol not found in tracked universe.")
-        if single_symbol_enabled and valid_single_symbol:
-            st.success(f"Single-symbol run ready: {single_symbol_input}")
-
-    st.session_state.setdefault("custom_symbols_raw", "")
-    st.session_state.setdefault("selected_equities", list(default_equities or tracked_universe))
-
-    # Campo para equities manuales (solo permitidos los del universo)
-    with st.sidebar.expander("Equities manuales para comprobación", expanded=False):
-        st.caption("Añade símbolos específicos del universo para forzar su inclusión en el backtest, además de la selección normal.")
-        manual_equities_raw = st.text_input(
-            "Equities manuales (coma o espacio)",
-            value="",
-            placeholder="AAPL, NVDA",
-            help="Solo símbolos del universo mostrado arriba.",
-        )
-        manual_equities = [s for s in parse_custom_symbols(manual_equities_raw.replace(" ", ",")) if s in tracked_universe]
-        not_found = [s for s in parse_custom_symbols(manual_equities_raw.replace(" ", ",")) if s and s not in tracked_universe]
-        if not_found:
-            st.warning(f"No están en el universo: {', '.join(not_found)}")
-        if manual_equities:
-            st.success(f"Se añadirán: {', '.join(manual_equities)}")
-
-    with st.sidebar.expander("Research Overrides", expanded=False):
-        st.caption("Use only for testing custom subsets. Normal runs use the tracked universe above.")
-        research_override_enabled = st.checkbox(
-            "Override universe for this run",
-            value=False,
-        )
-        custom_symbols_raw = st.text_input(
-            "Research Symbols",
-            value=st.session_state["custom_symbols_raw"],
-            placeholder="TSLA, AMD, INTC",
-            help="Comma-separated symbols added only for research-mode runs.",
-            disabled=not research_override_enabled,
-        )
-        custom_symbols = parse_custom_symbols(custom_symbols_raw)
-        equity_options = list(dict.fromkeys([
-            *tracked_universe,
-            "AAPL", "NVDA", "AMZN", "MSFT", "GOOGL", "META", "QQQ", "SPY",
-            *[sym.upper() for sym in default_equities],
-            *custom_symbols,
-        ]))
-        equities = st.multiselect(
-            "Research Universe",
-            options=equity_options,
-            default=st.session_state["selected_equities"],
-            disabled=not research_override_enabled,
-        )
-        st.session_state["selected_equities"] = equities
-        st.session_state["custom_symbols_raw"] = custom_symbols_raw
 
     st.sidebar.subheader("Strategy")
     or_minutes = st.sidebar.selectbox(
@@ -486,43 +377,21 @@ def build_sidebar(default_cfg: dict) -> tuple[dict, date, date]:
     cfg["strategy"]["trend_mode"]["displacement_min_atr_pct"] = displacement_min_atr_pct
     cfg["strategy"]["trend_mode"]["displacement_min_body_pct"] = displacement_min_body_pct
 
-    cfg.setdefault("pre_session", {})["enabled"] = pre_session_enabled
-    cfg["pre_session"]["top_n"] = int(selector_top_n)
-    cfg["pre_session"]["freeze_daily_selection"] = freeze_daily
-    cfg["pre_session"].setdefault("selection_rules", {})
-    cfg["pre_session"]["selection_rules"]["pf_missing_policy"] = pf_missing_policy
-    cfg["pre_session"]["selection_rules"]["spread_missing_policy"] = spread_missing_policy
-    cfg["pre_session"]["selection_rules"]["pf_lookback_trades"] = pf_lookback_trades
-    cfg["pre_session"]["selection_rules"]["require_pf_history"] = legacy_require_pf
-    cfg["pre_session"]["selection_rules"]["require_spread_data"] = legacy_require_spread
-
     cfg["session"]["end_time"]   = session_end
     cfg["commissions"]["per_trade_flat"] = commission
-    if single_symbol_enabled and valid_single_symbol:
-        cfg["instruments"]["equities"] = [single_symbol_input]
-        cfg["instruments"]["custom_symbols"] = []
-    elif research_override_enabled:
-        # Añadir manual_equities a la selección si no están ya
-        combined = equities + [s for s in manual_equities if s not in equities]
-        cfg["instruments"]["equities"] = combined
-        cfg["instruments"]["custom_symbols"] = custom_symbols
+
+    # If user selected specific equities, use only those; else use all
+    # Use the current selection for the run
+    equities_to_run = st.session_state.get("selected_equities", [])
+    if equities_to_run:
+        cfg["instruments"]["equities"] = equities_to_run
     else:
-        # Añadir manual_equities a la selección normal si no están ya
-        combined = (tracked_universe or default_equities) + [s for s in manual_equities if s not in (tracked_universe or default_equities)]
-        cfg["instruments"]["equities"] = combined
-        cfg["instruments"]["custom_symbols"] = []
+        cfg["instruments"]["equities"] = tracked_universe or default_equities
+    cfg["instruments"]["custom_symbols"] = []
 
     save_user_prefs({
         "start_date": start_date.isoformat(),
         "end_date": end_date.isoformat(),
-        "pre_session_enabled": pre_session_enabled,
-        "selector_top_n": int(selector_top_n),
-        "freeze_daily": freeze_daily,
-        "pf_missing_policy": pf_missing_policy,
-        "spread_missing_policy": spread_missing_policy,
-        "pf_lookback_trades_raw": int(pf_lookback_trades_raw),
-        "legacy_require_pf": legacy_require_pf,
-        "legacy_require_spread": legacy_require_spread,
         "or_minutes": int(or_minutes),
         "manip_threshold": int(manip_threshold),
         "allow_gap_entry": allow_gap_entry,

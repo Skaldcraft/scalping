@@ -126,7 +126,7 @@ pre_session:
     - {symbol: "EURUSD=X", asset_class: "forex"}
     - {symbol: "GBPUSD=X", asset_class: "forex"}
     - {symbol: "JPY=X", asset_class: "forex"}
-    - {symbol: "XAUUSD=X", asset_class: "metal"}
+    - {symbol: "GC=F", asset_class: "metal"}
   selection_rules:
     min_profit_factor: 1.5
     min_trades_for_pf: 10
