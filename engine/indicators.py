@@ -1,4 +1,4 @@
-def add_sma(df: pd.DataFrame, period: int, source: str = "close", name: str = None) -> pd.DataFrame:
+def add_sma(df: pd.DataFrame, period: int = 20, source: str = "close", name: str = None) -> pd.DataFrame:
 
 import pandas as pd
 
@@ -10,12 +10,7 @@ def add_sma(df: pd.DataFrame, period: int = 20, source: str = "close", name: str
     return out
 
 
-def add_ema(df: pd.DataFrame, period: int, source: str = "close", name: str = None) -> pd.DataFrame:
-    """Add an exponential moving average (EMA) column to a DataFrame."""
-    out = df.copy()
-    col = name or f"ema_{period}"
-    out[col] = out[source].ewm(span=period, adjust=False).mean()
-    return out
+
 
 
 def add_atr(df: pd.DataFrame, period: int = 14, name: str = None) -> pd.DataFrame:
