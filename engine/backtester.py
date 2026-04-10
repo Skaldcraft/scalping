@@ -47,6 +47,7 @@ from engine.signals import (
     detect_breakout_signal,
     detect_manipulation_signal,
     detect_mean_reversion_signal,
+    detect_mean_reversion_20ma_signal,
 )
 from engine.trade import resolve_trade
 from risk.circuit_breaker import CircuitBreaker
@@ -478,11 +479,22 @@ class Backtester:
             )
 
             if signal is None:
-                # Attempt mean reversion fallback
+                # Attempt mean reversion fallback (standard)
                 mode_activated = StrategyMode.MEAN_REVERSION
                 signal = detect_mean_reversion_signal(
                     post_bars, opening_range, initial_spike_direction, self.session_end_time
                 )
+                # If still no signal, try 20 MA mean reversion for QQQ and GC=F
+                if signal is None and symbol in ("QQQ", "GC=F"):
+                    signal = detect_mean_reversion_20ma_signal(
+                        post_bars,
+                        opening_range,
+                        self.session_end_time,
+                        deviation_threshold=0.5,  # 0.5% deviation
+                        retracement_levels=[0.25, 0.5, 0.75],
+                        risk_pct=self.risk_pct,
+                        instrument=symbol,
+                    )
                 if signal is None:
                     rejection_reasons.append("no_signal_found")
                     if self.allow_displacement_gap_entry:

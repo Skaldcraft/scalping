@@ -1,3 +1,4 @@
+from engine.indicators import add_sma, price_ma_deviation
 """
 engine/signals.py
 =================
@@ -257,6 +258,10 @@ def _is_qualified_gap(
     from data.models import TradeDirection as _TD  # local import avoids circular ref
     is_gap = (
         _is_displacement_gap_long(prior, current)
+        # ---------------------------------------------------------------------------
+        # Mode D: Mean Reversion / 20 MA Deviation (QQQ, GC=F)
+        # ---------------------------------------------------------------------------
+
         if direction == _TD.LONG
         else _is_displacement_gap_short(prior, current)
     )
@@ -754,8 +759,11 @@ def detect_mean_reversion_signal(
                 direction=entry_direction,
                 entry_price=entry_price,
                 stop_loss=sl,
-                take_profit_2r=tp2,
-                take_profit_3r=tp3,
+                    take_profit_2r=tp2,
+                    take_profit_3r=tp3,
+                    one_r_target=round(entry_price + (tp_target - entry_price) * 0.5, 6),
+                    partial_scale_pct=50.0,
+                    move_sl_to_be=True,
                 signal_time=entry_bar.name.to_pydatetime(),
             )
 
