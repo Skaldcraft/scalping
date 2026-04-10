@@ -532,21 +532,25 @@ class Backtester:
         # ------------------------------------------------------------------
         # Multi-timeframe trend alignment and DXY filter
         # ------------------------------------------------------------------
+
+        # Ensure 20 MA is present in all timeframes
+        for bars in (intraday_df, bars_5m, bars_15m):
+            if "sma_20" not in bars.columns:
+                bars["sma_20"] = bars["close"].rolling(window=20, min_periods=20).mean()
+
         trend_state = classify_trend_alignment(
-            signal.signal_time,
             intraday_df,
             bars_5m,
             bars_15m,
-            ema_1m_period=self.ema_1m_period,
-            ema_5m_fast=self.ema_5m_fast,
-            ema_5m_slow=self.ema_5m_slow,
-            ema_15m_fast=self.ema_15m_fast,
-            ema_15m_slow=self.ema_15m_slow,
+            ma_col="sma_20",
+            price_col="close",
+            lookback=50
         ) if self.mtf_enabled else "unknown"
 
+
+        # Map trend_state to boolean for trade alignment
         signal.trend_aligned = (
-            (signal.direction == TradeDirection.LONG and trend_state == "bullish")
-            or (signal.direction == TradeDirection.SHORT and trend_state == "bearish")
+            trend_state == "Strongly Aligned"
         ) if self.mtf_enabled else True
 
         if self.require_trend_alignment and not signal.trend_aligned:
