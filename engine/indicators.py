@@ -26,8 +26,6 @@ def add_sma(df: pd.DataFrame, period: int, source: str = "close", name: str = No
     out[col] = out[source].rolling(window=period, min_periods=period).mean()
     return out
 
-                        tp_reversal_level=round(tp_reversal, 6),
-    """Return the absolute price deviation from the MA (close - MA)."""
     return (df["close"] - df[ma_col]).abs()
 
 @dataclass
@@ -66,6 +64,7 @@ class FibZones:
     if fast < slow:
         return "bearish"
     return "neutral"
+
 
 
 from __future__ import annotations
