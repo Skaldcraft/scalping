@@ -36,7 +36,7 @@ from engine.opening_range import calculate_opening_range, calculate_atr, is_mani
 from engine.indicators import (
     add_atr,
     classify_trend_alignment,
-    dxy_bias_at,
+    get_dxy_bias,
     dxy_confirms_direction,
     get_fib_zones,
     in_fib_zone,
@@ -574,9 +574,9 @@ class Backtester:
                 rejection_reasons=rejection_reasons,
             )
 
-        dxy_bias = dxy_bias_at(
-            signal.signal_time,
+        dxy_bias = get_dxy_bias(
             dxy_df,
+            signal.signal_time,
             ema_fast=self.dxy_ema_fast,
             ema_slow=self.dxy_ema_slow,
         ) if self.dxy_filter_enabled else "unknown"
