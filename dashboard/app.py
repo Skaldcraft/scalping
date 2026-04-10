@@ -491,6 +491,10 @@ def build_trade_df(all_trades: list) -> pd.DataFrame:
 
     rows = []
     for t in all_trades:
+        is_base_hit = (
+            (str(t.instrument).upper() in ("QQQ", "GC=F", "XAUUSD", "XAUUSD=X"))
+            and (str(t.pattern_detected).lower() == "20ma_deviation")
+        )
         rows.append({
             "ID":           t.trade_id,
             "Date":         t.session_date,
@@ -508,6 +512,7 @@ def build_trade_df(all_trades: list) -> pd.DataFrame:
             "Exit Reason":  (t.exit_reason or "").replace("_", " ").title(),
             "Pattern":      t.pattern_detected or "—",
             "Manipulation": "Yes" if t.manipulation_flagged else "No",
+            "Base Hit":     "Yes" if is_base_hit else "",
         })
 
     return pd.DataFrame(rows)

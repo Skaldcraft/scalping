@@ -123,6 +123,10 @@ def resolve_trade(
     stop_3r = sl
 
     exit_reason = ExitReason.SESSION_END
+    # For 20MA mean reversion, allow custom exit reason from signal.extra_info
+    custom_exit_reason = None
+    if hasattr(signal, 'extra_info') and signal.extra_info is not None:
+        custom_exit_reason = signal.extra_info.get('exit_reason')
 
     for ts, bar in remaining_bars.iterrows():
         bar_time = ts.to_pydatetime()
@@ -242,7 +246,14 @@ def resolve_trade(
                 remaining_scale=remaining_scale if result_2r["partial_taken"] else 1.0,
             )
             result_2r["outcome"] = "win"
-            exit_reason = ExitReason.TP_HIT
+            if custom_exit_reason == "tp_25_only":
+                exit_reason = ExitReason.TP_25_ONLY
+            elif custom_exit_reason == "tp_25_and_monitor":
+                exit_reason = ExitReason.TP_25_AND_MONITOR
+            elif custom_exit_reason == "trend_reversal":
+                exit_reason = ExitReason.TREND_REVERSAL
+            else:
+                exit_reason = ExitReason.TP_HIT
 
         if hit_tp3 and not result_3r["resolved"]:
             _close_scaled_target(

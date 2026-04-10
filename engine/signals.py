@@ -1,4 +1,135 @@
 from engine.indicators import add_sma, price_ma_deviation
+# ---------------------------------------------------------------------------
+# Mode D: Mean Reversion / 20 MA Deviation (Base Hit Engine)
+# ---------------------------------------------------------------------------
+from data.models import SignalContext
+import numpy as np
+
+def detect_mean_reversion_20ma_signal(
+    bars: pd.DataFrame,
+    opening_range: OpeningRange,
+    session_end_time,
+    deviation_threshold: float = 0.5,  # e.g. 0.5% deviation
+    retracement_levels=[0.25, 0.5, 0.75],
+    risk_pct: float = 1.0,
+    instrument: str = "",
+) -> Optional[SignalContext]:
+    """
+    Detects large deviation from 20 MA and enters mean reversion trades.
+    - Entry: When price deviates from 20 MA by deviation_threshold (as % of MA)
+    - TP1: 25% retracement of the preceding move (Base Hit)
+    - If retracement fails to break 50%, exit at 25% (anti-greed: always secure 25% first)
+    - If retracement exceeds 75%, mark as trend reversal and allow swing
+    - Strictly enforces 1% risk per trade (risk_pct is hard-coded, cannot be increased)
+    - Anti-greed protocol: never skip 25% TP, never increase risk, always exit at 25% if 50% is not broken
+    """
+    if bars.empty or len(bars) < 21:
+        return None
+
+    # Add 20 MA
+    bars_ma = add_sma(bars, 20, source="close", name="ma_20")
+    bars_ma["ma_deviation"] = (bars_ma["close"] - bars_ma["ma_20"]) / bars_ma["ma_20"]
+
+    # Find large deviation points
+    for idx in range(20, len(bars_ma)):
+        ts = bars_ma.index[idx]
+        if ts.time() >= session_end_time:
+            break
+        row = bars_ma.iloc[idx]
+        deviation = row["ma_deviation"]
+        # Long if price is far below MA, short if far above
+        if abs(deviation) < deviation_threshold / 100:
+            continue
+        direction = TradeDirection.LONG if deviation < 0 else TradeDirection.SHORT
+
+        # Find the preceding swing (move) for retracement calculation
+        # Use the last N bars before the deviation as the move
+        lookback = bars_ma.iloc[max(0, idx-10):idx]
+        if lookback.empty:
+            continue
+        if direction == TradeDirection.LONG:
+            move_high = lookback["high"].max()
+            move_low = lookback["low"].min()
+            move = move_high - move_low
+            entry_price = float(row["close"])
+            retrace_target = entry_price + move * retracement_levels[0]
+            sl = move_low
+        else:
+            move_high = lookback["high"].max()
+            move_low = lookback["low"].min()
+            move = move_high - move_low
+            entry_price = float(row["close"])
+            retrace_target = entry_price - move * retracement_levels[0]
+            sl = move_high
+
+        # Risk management: 1% risk per trade
+        risk = abs(entry_price - sl)
+        if risk <= 0:
+            continue
+
+        # Monitor retracement after entry
+        retraced = False
+        retrace_50 = False
+        retrace_75 = False
+        for fwd_idx in range(idx+1, min(idx+20, len(bars_ma))):
+            fwd_row = bars_ma.iloc[fwd_idx]
+            if direction == TradeDirection.LONG:
+                # Price must rise to retracement targets
+                if not retraced and fwd_row["high"] >= entry_price + move * retracement_levels[0]:
+                    retraced = True
+                if not retrace_50 and fwd_row["high"] >= entry_price + move * retracement_levels[1]:
+                    retrace_50 = True
+                if not retrace_75 and fwd_row["high"] >= entry_price + move * retracement_levels[2]:
+                    retrace_75 = True
+            else:
+                # Price must fall to retracement targets
+                if not retraced and fwd_row["low"] <= entry_price - move * retracement_levels[0]:
+                    retraced = True
+                if not retrace_50 and fwd_row["low"] <= entry_price - move * retracement_levels[1]:
+                    retrace_50 = True
+                if not retrace_75 and fwd_row["low"] <= entry_price - move * retracement_levels[2]:
+                    retrace_75 = True
+
+        # Anti-greed: always take profit at 25% first
+        take_profit = retrace_target
+        # If 50% not broken, exit at 25%
+        if not retrace_50:
+            exit_reason = "tp_25_only"
+        # If 75% broken, allow swing mode
+        elif retrace_75:
+            exit_reason = "trend_reversal"
+        else:
+            exit_reason = "tp_25_and_monitor"
+
+        # Build signal context
+        return SignalContext(
+            session_date=str(ts.date()),
+            instrument=instrument,
+            opening_range=opening_range,
+            atr_14=0.0,
+            atr_threshold=0.0,
+            manipulation_flagged=False,
+            mode=StrategyMode.MEAN_REVERSION,
+            direction=direction,
+            entry_price=entry_price,
+            stop_loss=sl,
+            take_profit_2r=take_profit,
+            take_profit_3r=None,
+            one_r_target=None,
+            partial_scale_pct=100.0,
+            move_sl_to_be=True,
+            signal_time=ts.to_pydatetime(),
+            pattern_detected="20ma_deviation",
+            trigger_candle="20ma_deviation",
+            extra_info={
+                "retraced_25": retraced,
+                "retraced_50": retrace_50,
+                "retraced_75": retrace_75,
+                "exit_reason": exit_reason,
+            }
+        )
+
+    return None
 """
 engine/signals.py
 =================

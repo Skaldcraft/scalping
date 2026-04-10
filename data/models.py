@@ -33,6 +33,9 @@ class ExitReason(str, Enum):
     SL_HIT       = "sl_hit"
     SESSION_END  = "session_end"
     CIRCUIT_BREAK = "circuit_breaker"
+    TP_25_ONLY   = "tp_25_only"         # 25% retracement hit, 50% not broken
+    TP_25_AND_MONITOR = "tp_25_and_monitor" # 25% hit, monitoring for more
+    TREND_REVERSAL = "trend_reversal"   # 75% retracement, swing mode
 
 
 # ---------------------------------------------------------------------------
