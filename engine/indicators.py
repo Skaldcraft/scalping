@@ -75,19 +75,7 @@ def to_heikin_ashi(df: pd.DataFrame) -> pd.DataFrame:
     out["ha_low"] = pd.concat([df["low"], ha_open, ha_close], axis=1).min(axis=1)
     return out
 
-
-@dataclass
-class FibZones:
-    cheap_buy_level: float
-    expensive_sell_level: float
-    midpoint_level: float
-    tp_reversal_level: float
-
-
 def get_fib_zones(opening_range: OpeningRange, reversal_tp_level: float = 0.382) -> FibZones:
-    """Calculate Fibonacci zones from the opening range."""
-    rng = opening_range.high - opening_range.low
-    cheap = opening_range.low + (0.618 * rng)
     expensive = opening_range.low + (0.382 * rng)
     midpoint = opening_range.midpoint
     tp_reversal = opening_range.low + (reversal_tp_level * rng)
