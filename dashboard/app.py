@@ -354,6 +354,23 @@ def build_sidebar(default_cfg: dict) -> tuple[dict, date, date]:
 
     st.session_state.setdefault("custom_symbols_raw", "")
     st.session_state.setdefault("selected_equities", list(default_equities or tracked_universe))
+
+    # Campo para equities manuales (solo permitidos los del universo)
+    with st.sidebar.expander("Equities manuales para comprobación", expanded=False):
+        st.caption("Añade símbolos específicos del universo para forzar su inclusión en el backtest, además de la selección normal.")
+        manual_equities_raw = st.text_input(
+            "Equities manuales (coma o espacio)",
+            value="",
+            placeholder="AAPL, NVDA",
+            help="Solo símbolos del universo mostrado arriba.",
+        )
+        manual_equities = [s for s in parse_custom_symbols(manual_equities_raw.replace(" ", ",")) if s in tracked_universe]
+        not_found = [s for s in parse_custom_symbols(manual_equities_raw.replace(" ", ",")) if s and s not in tracked_universe]
+        if not_found:
+            st.warning(f"No están en el universo: {', '.join(not_found)}")
+        if manual_equities:
+            st.success(f"Se añadirán: {', '.join(manual_equities)}")
+
     with st.sidebar.expander("Research Overrides", expanded=False):
         st.caption("Use only for testing custom subsets. Normal runs use the tracked universe above.")
         research_override_enabled = st.checkbox(
@@ -485,10 +502,14 @@ def build_sidebar(default_cfg: dict) -> tuple[dict, date, date]:
         cfg["instruments"]["equities"] = [single_symbol_input]
         cfg["instruments"]["custom_symbols"] = []
     elif research_override_enabled:
-        cfg["instruments"]["equities"] = equities
+        # Añadir manual_equities a la selección si no están ya
+        combined = equities + [s for s in manual_equities if s not in equities]
+        cfg["instruments"]["equities"] = combined
         cfg["instruments"]["custom_symbols"] = custom_symbols
     else:
-        cfg["instruments"]["equities"] = tracked_universe or default_equities
+        # Añadir manual_equities a la selección normal si no están ya
+        combined = (tracked_universe or default_equities) + [s for s in manual_equities if s not in (tracked_universe or default_equities)]
+        cfg["instruments"]["equities"] = combined
         cfg["instruments"]["custom_symbols"] = []
 
     save_user_prefs({
