@@ -288,7 +288,8 @@ def build_sidebar(default_cfg: dict) -> tuple[dict, date, date]:
     )
     # Reset button
     if st.sidebar.button("Reset selection to all", help="Reset to analyze all equities."):
-        st.session_state["selected_equities"] = []
+        st.session_state.selected_equities = []
+        st.experimental_rerun()
 
 
     st.sidebar.subheader("Strategy")
