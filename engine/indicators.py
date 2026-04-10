@@ -34,11 +34,7 @@ def add_atr(df: pd.DataFrame, period: int = 14, name: str = None) -> pd.DataFram
     low = out["low"]
     prev_close = out["close"].shift(1)
     tr = pd.concat(
-        [
-            high - low,
-            (high - prev_close).abs(),
-            (low - prev_close).abs(),
-        ],
+        [high - low, (high - prev_close).abs(), (low - prev_close).abs()],
         axis=1,
     ).max(axis=1)
     out[col] = tr.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
@@ -50,6 +46,45 @@ def price_ma_deviation(df: pd.DataFrame, ma_col: str = "sma_20") -> pd.Series:
     return (df["close"] - df[ma_col]).abs()
 
 
+def resample_ohlcv(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
+    """Resample a 1-minute OHLCV DataFrame to a higher timeframe.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Must have a DatetimeIndex and columns: open, high, low, close, volume.
+    timeframe : str
+        Pandas offset alias, e.g. '5min', '15min', '1h'.
+    """
+    resampled = df.resample(timeframe).agg(
+        open=("open", "first"),
+        high=("high", "max"),
+        low=("low", "min"),
+        close=("close", "last"),
+        volume=("volume", "sum"),
+    ).dropna()
+    return resampled
+
+
+def to_heikin_ashi(df: pd.DataFrame) -> pd.DataFrame:
+    """Convert a standard OHLCV DataFrame to Heikin-Ashi candles.
+
+    Requires columns: open, high, low, close.
+    Returns a new DataFrame with ha_open, ha_high, ha_low, ha_close columns.
+    """
+    out = df.copy()
+    ha_close = (df["open"] + df["high"] + df["low"] + df["close"]) / 4
+    ha_open = ha_close.copy()
+    ha_open.iloc[0] = (df["open"].iloc[0] + df["close"].iloc[0]) / 2
+    for i in range(1, len(df)):
+        ha_open.iloc[i] = (ha_open.iloc[i - 1] + ha_close.iloc[i - 1]) / 2
+    out["ha_open"] = ha_open
+    out["ha_close"] = ha_close
+    out["ha_high"] = pd.concat([df["high"], ha_open, ha_close], axis=1).max(axis=1)
+    out["ha_low"] = pd.concat([df["low"], ha_open, ha_close], axis=1).min(axis=1)
+    return out
+
+
 @dataclass
 class FibZones:
     cheap_buy_level: float
@@ -59,6 +94,7 @@ class FibZones:
 
 
 def get_fib_zones(opening_range: OpeningRange, reversal_tp_level: float = 0.382) -> FibZones:
+    """Calculate Fibonacci zones from the opening range."""
     rng = opening_range.high - opening_range.low
     cheap = opening_range.low + (0.618 * rng)
     expensive = opening_range.low + (0.382 * rng)
@@ -72,6 +108,15 @@ def get_fib_zones(opening_range: OpeningRange, reversal_tp_level: float = 0.382)
     )
 
 
+def in_fib_zone(price: float, fib_zones: FibZones, direction: TradeDirection) -> bool:
+    """Return True if price is within the relevant Fib zone for the given direction."""
+    if direction == TradeDirection.LONG:
+        return price <= fib_zones.cheap_buy_level
+    if direction == TradeDirection.SHORT:
+        return price >= fib_zones.expensive_sell_level
+    return False
+
+
 def get_dxy_bias(
     dxy_1m: pd.DataFrame,
     ts,
@@ -81,16 +126,13 @@ def get_dxy_bias(
     """Return DXY trend bias based on EMA crossover."""
     if dxy_1m.empty:
         return "unknown"
-
     dxy = dxy_1m.loc[:ts]
     if len(dxy) < ema_slow:
         return "unknown"
-
     dxy = add_ema(add_ema(dxy, ema_fast), ema_slow)
     last = dxy.iloc[-1]
     fast = float(last[f"ema_{ema_fast}"])
     slow = float(last[f"ema_{ema_slow}"])
-
     if fast > slow:
         return "bullish"
     if fast < slow:
@@ -99,34 +141,32 @@ def get_dxy_bias(
 
 
 def dxy_confirms_direction(symbol: str, direction: TradeDirection, dxy_bias: str, pairs: list[str]) -> bool:
+    """Return True if the DXY bias confirms the intended trade direction."""
     normalised = symbol.strip().upper()
     apply = any(normalised == p.upper() for p in pairs)
     if not apply:
         return True
-
     if dxy_bias == "unknown" or dxy_bias == "neutral":
         return False
-
     if direction == TradeDirection.SHORT:
         return dxy_bias == "bullish"
     return dxy_bias == "bearish"
 
 
-# --- Multi-Timeframe Trend Alignment using 20 MA Slope and Retracement ---
 def classify_trend_alignment(
     df_1m: pd.DataFrame,
     df_5m: pd.DataFrame,
     df_15m: pd.DataFrame,
     ma_col: str = "sma_20",
     price_col: str = "close",
-    lookback: int = 50
+    lookback: int = 50,
 ) -> str:
+    """Multi-timeframe trend alignment using 20 MA slope and retracement rules.
+
+    Returns one of: 'Strongly Aligned', 'Reversal Established',
+    'Neutral/Caution', or 'unknown'.
     """
-    Multi-timeframe trend alignment using 20 MA slope and retracement rules.
-    - All timeframes (1m, 5m, 15m) must have 20 MA sloping in the same direction.
-    - 5m and 15m must not have retracement > 50% for 'Strongly Aligned'.
-    - If retracement > 75% on 5m or 15m, return 'Reversal Established'.
-    """
+
     def get_trend_and_retracement(df, ma_col, price_col, lookback):
         if len(df) < lookback:
             return "unknown", None
@@ -138,13 +178,11 @@ def classify_trend_alignment(
         price = df[price_col].iloc[-lookback:]
         if trend == "up":
             last_high = price.max()
-            last_low = price[price.idxmax():].min()
-            move = last_high - last_low
+            move = last_high - price[price.idxmax():].min()
             retracement = (last_high - price.iloc[-1]) / move if move > 0 else 0
         elif trend == "down":
             last_low = price.min()
-            last_high = price[price.idxmin():].max()
-            move = last_high - last_low
+            move = price[price.idxmin():].max() - last_low
             retracement = (price.iloc[-1] - last_low) / move if move > 0 else 0
         else:
             retracement = None
@@ -157,14 +195,10 @@ def classify_trend_alignment(
     if "unknown" in (trend_1m, trend_5m, trend_15m) or None in (retr_5m, retr_15m):
         return "unknown"
 
-    # All timeframes must agree on trend direction (not flat)
     if trend_1m == trend_5m == trend_15m and trend_1m in ("up", "down"):
-        # Check for reversal first (75% rule)
         if retr_5m > 0.75 or retr_15m > 0.75:
             return "Reversal Established"
-        # Check for strong alignment (50% rule)
         if retr_5m < 0.5 and retr_15m < 0.5:
             return "Strongly Aligned"
-        # Caution zone
         return "Neutral/Caution"
     return "Neutral/Caution"
