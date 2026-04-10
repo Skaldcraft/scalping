@@ -1,4 +1,4 @@
-def add_sma(df: pd.DataFrame, period: int = 20, source: str = "close", name: str = None) -> pd.DataFrame:
+import pandas as pd
 
 import pandas as pd
 
