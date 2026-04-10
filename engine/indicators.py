@@ -1,13 +1,9 @@
-from __future__ import annotations
-
-from dataclasses import dataclass
-from typing import Optional
-import pandas as pd
-from data.models import OpeningRange, TradeDirection
-
-
 def add_sma(df: pd.DataFrame, period: int, source: str = "close", name: str = None) -> pd.DataFrame:
-    """Add a simple moving average (SMA) column to a DataFrame."""
+
+import pandas as pd
+
+def add_sma(df: pd.DataFrame, period: int = 20, source: str = "close", name: str = None) -> pd.DataFrame:
+    """Add a 20-period simple moving average (SMA) column to a DataFrame."""
     out = df.copy()
     col = name or f"sma_{period}"
     out[col] = out[source].rolling(window=period, min_periods=period).mean()
@@ -42,7 +38,7 @@ def add_atr(df: pd.DataFrame, period: int = 14, name: str = None) -> pd.DataFram
 
 
 def price_ma_deviation(df: pd.DataFrame, ma_col: str = "sma_20") -> pd.Series:
-    """Return the absolute price deviation from the MA (close - MA)."""
+    """Return the absolute price deviation from the 20 MA (close - MA)."""
     return (df["close"] - df[ma_col]).abs()
 
 

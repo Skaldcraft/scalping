@@ -93,6 +93,7 @@ instruments:
     - AMZN
     - QQQ
     - SPY
+    - TSLA
   # Forex: place your OHLCV CSV files in data_files/ and add entries below.
   # Expected CSV columns (case-insensitive): timestamp, open, high, low, close, volume
   # Timestamps should be in ISO 8601 format, America/New_York timezone preferred.
