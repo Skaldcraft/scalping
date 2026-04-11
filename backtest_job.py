@@ -51,7 +51,94 @@ def load_config(config_path: str | Path) -> dict:
         raise FileNotFoundError(f"Config file not found: {path}")
 
     with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        cfg = yaml.safe_load(f)
+
+    validate_config(cfg)
+    return cfg
+
+
+class ConfigValidationError(Exception):
+    """Raised when a configuration value is out of its valid range."""
+    pass
+
+
+def validate_config(cfg: dict) -> None:
+    """
+    Validate critical configuration parameters.
+
+    Raises ConfigValidationError if any value is out of its valid range.
+    Logs a WARNING if displacement_min_atr_pct is 0 (degenerate but not an error).
+    """
+    strategy = cfg.get("strategy", {})
+    account = cfg.get("account", {})
+    risk = cfg.get("risk", {})
+
+    _check_range(
+        "displacement_min_atr_pct",
+        strategy.get("trend_mode", {}).get("displacement_min_atr_pct"),
+        min_val=0.0,
+        max_val=100.0,
+        cfg=cfg,
+    )
+    _check_range(
+        "displacement_min_body_pct",
+        strategy.get("trend_mode", {}).get("displacement_min_body_pct"),
+        min_val=0.0,
+        max_val=100.0,
+        cfg=cfg,
+    )
+    _check_range(
+        "risk_per_trade_pct",
+        account.get("risk_per_trade_pct"),
+        min_val=0.1,
+        max_val=5.0,
+        cfg=cfg,
+    )
+    _check_range(
+        "daily_loss_limit_pct",
+        account.get("daily_loss_limit_pct"),
+        min_val=0.5,
+        max_val=20.0,
+        cfg=cfg,
+    )
+    _check_range(
+        "profit_factor_floor",
+        risk.get("profit_factor_floor"),
+        min_val=0.5,
+        max_val=5.0,
+        cfg=cfg,
+    )
+
+    disp_atr = strategy.get("trend_mode", {}).get("displacement_min_atr_pct", 0.0)
+    if disp_atr == 0.0:
+        log.warning(
+            "displacement_min_atr_pct is 0 — displacement gap entries will "
+            "qualify without any minimum size threshold. This may allow "
+            "low-quality entries. Consider setting a value >= 1.0."
+        )
+
+
+def _check_range(
+    name: str,
+    value: float | None,
+    min_val: float,
+    max_val: float,
+    cfg: dict,
+) -> None:
+    if value is None:
+        raise ConfigValidationError(
+            f"Missing required config field: '{name}'"
+        )
+    if not isinstance(value, (int, float)):
+        raise ConfigValidationError(
+            f"Config field '{name}' must be numeric, got {type(value).__name__}: {value!r}"
+        )
+    if value < min_val or value > max_val:
+        raise ConfigValidationError(
+            f"Config field '{name}'={value} is outside valid range "
+            f"[{min_val}, {max_val}]. "
+            f"Update config/settings.yaml to use a value within this range."
+        )
 
 
 def run_backtest_job(

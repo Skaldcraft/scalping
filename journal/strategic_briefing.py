@@ -298,28 +298,42 @@ def build_strategic_briefing(
             "Execution Mode: Current conditions support balanced use of displacement and retest logic while higher-timeframe alignment remains the primary quality gate."
         )
 
+    disp_min_atr_pct = float((config or {}).get("strategy", {}).get("trend_mode", {}).get("displacement_min_atr_pct", 0))
+    disp_min_body_pct = float((config or {}).get("strategy", {}).get("trend_mode", {}).get("displacement_min_body_pct", 0))
+
     if gap_size_rejections > 0 or gap_body_rejections > 0:
         gap_interpretation = (
             "The system detected a potential move, but the 'footprint' was too light. "
             "We avoided a potential trap because the candle did not show enough solid institutional power (body) or size (ATR%)."
         )
         gap_precision_reco = (
-            "Gap Precision: The system detected a potential move, but the 'footprint' was too light. "
-            "We avoided a potential trap because the candle did not show enough solid institutional power (body) or size (ATR%)."
+            f"Gap Precision: The system detected a potential move, but the 'footprint' was too light. "
+            f"We avoided a potential trap because the candle did not show enough solid institutional power (body) or size (ATR%)."
         )
     elif fakeout_ratio >= 0.35 and wr < 0.50:
         gap_interpretation = (
             "The current market is favoring more solid confirmation; waiting for a larger gap or a cleaner candle body may help filter out these traps."
         )
         gap_precision_reco = (
-            "Gap Precision: The current market is favoring more solid confirmation; waiting for a larger gap or a cleaner candle body may help filter out these traps."
+            f"Gap Precision: The current market is favoring more solid confirmation; waiting for a larger gap or a cleaner candle body may help filter out these traps."
         )
     else:
+        parts = []
+        if disp_min_atr_pct > 0:
+            parts.append(f"gaps under {disp_min_atr_pct:.0f}% of ATR are held out")
+        if disp_min_body_pct > 0:
+            parts.append(f"candles with body under {disp_min_body_pct:.0f}% of range are held out")
+        if parts:
+            filter_detail = "; " + ", ".join(parts) + "."
+        else:
+            filter_detail = ""
+
         gap_interpretation = (
-            "Current displacement filters are keeping weaker footprints out while preserving room for high-quality continuation candles."
+            "No weak displacement candidates reached the entry window this period. "
+            f"The configured gates kept the chart clear of noise.{filter_detail}"
         )
         gap_precision_reco = (
-            "Gap Precision: Current min-size and min-body gates are adequately filtering weak footprints without materially choking valid momentum."
+            "Gap Precision: No adjustment needed — the current displacement gates are holding noise out without blocking valid setups."
         )
 
     fakeout_interpretation = None

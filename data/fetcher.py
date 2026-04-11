@@ -13,15 +13,58 @@ Expected DataFrame columns (all float except timestamp):
     timestamp (DatetimeTZDtype, America/New_York), open, high, low, close, volume
 """
 
+import hashlib
 import logging
+import math
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
-from datetime import date
 
 import pandas as pd
 import yfinance as yf
 
 log = logging.getLogger(__name__)
+
+_CACHE_DIR = Path("data_files/_yfinance_cache")
+_INTRADAY_TTL = timedelta(minutes=15)
+_DAILY_TTL = timedelta(hours=20)
+
+
+def _cache_key(symbol: str, interval: str, start: date, end: date) -> str:
+    key_str = f"{symbol}|{interval}|{start}|{end}"
+    return hashlib.sha1(key_str.encode()).hexdigest()[:16]
+
+
+def _cache_path(symbol: str, interval: str, start: date, end: date) -> Path:
+    key = _cache_key(symbol, interval, start, end)
+    return _CACHE_DIR / f"{symbol}_{interval}_{key}.parquet"
+
+
+def _read_cache(symbol: str, interval: str, start: date, end: date) -> Optional[pd.DataFrame]:
+    path = _cache_path(symbol, interval, start, end)
+    if not path.exists():
+        return None
+    try:
+        age = datetime.now() - datetime.fromtimestamp(path.stat().st_mtime)
+        ttl = _INTRADAY_TTL if interval != "1d" else _DAILY_TTL
+        if age > ttl:
+            return None
+        df = pd.read_parquet(path)
+        log.debug("[%s] Cache hit: %s %s %s → %s (%s old)", symbol, interval, start, end, path.name, age)
+        return df
+    except Exception as exc:
+        log.debug("Cache read failed for %s: %s", path, exc)
+        return None
+
+
+def _write_cache(df: pd.DataFrame, symbol: str, interval: str, start: date, end: date) -> None:
+    try:
+        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        path = _cache_path(symbol, interval, start, end)
+        df.to_parquet(path, index=True)
+        log.debug("[%s] Cached: %s %s %s → %s", symbol, interval, start, end, path.name)
+    except Exception as exc:
+        log.debug("Cache write failed for %s %s %s: %s", symbol, interval, start, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -77,9 +120,13 @@ def fetch_intraday(
       - 5m bars : last 60 calendar days  (up to ~730 days with chunking)
       - 15m bars: last 60 calendar days
 
-    For backtests longer than 60 days the caller should use fetch_intraday
-    in rolling 60-day windows; the backtester handles this automatically.
+    Results are cached locally in Parquet files with a 15-minute TTL for
+    intraday data to reduce unnecessary API calls during repeated runs.
     """
+    cached = _read_cache(symbol, interval, start, end)
+    if cached is not None:
+        return cached
+
     log.debug("yfinance fetch: %s %s %s → %s", symbol, interval, start, end)
     ticker = yf.Ticker(symbol)
     df = ticker.history(
@@ -95,7 +142,9 @@ def fetch_intraday(
             f"between {start} and {end}. "
             "Check symbol name and ensure the date range is within yfinance limits."
         )
-    return _normalise(df, symbol)
+    df = _normalise(df, symbol)
+    _write_cache(df, symbol, interval, start, end)
+    return df
 
 
 def fetch_daily(
@@ -103,7 +152,16 @@ def fetch_daily(
     start: date,
     end: date,
 ) -> pd.DataFrame:
-    """Fetch daily OHLCV bars used for ATR calculation."""
+    """
+    Fetch daily OHLCV bars used for ATR calculation.
+
+    Results are cached locally in Parquet files with a 20-hour TTL for
+    daily data (new bar only appears after market close).
+    """
+    cached = _read_cache(symbol, "1d", start, end)
+    if cached is not None:
+        return cached
+
     log.debug("yfinance daily fetch: %s %s → %s", symbol, start, end)
     ticker = yf.Ticker(symbol)
     df = ticker.history(
@@ -115,7 +173,59 @@ def fetch_daily(
     )
     if df.empty:
         raise ValueError(f"yfinance returned no daily data for {symbol}.")
-    return _normalise(df, symbol)
+    df = _normalise(df, symbol)
+    _write_cache(df, symbol, "1d", start, end)
+    return df
+
+
+_FORMULA_PREFIXES = ("=", "+", "-", "@")
+
+
+def _sanitize_dataframe(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
+    """
+    Neutralize formula injection in DataFrame string columns.
+
+    Spreadsheet formula injection occurs when cell values start with =, +, -,
+    or @. This function strips those prefixes and prepends a space to prevent
+    the value from being interpreted as a formula when the DataFrame is
+    exported to CSV and opened in Excel or Google Sheets.
+
+    Parameters
+    ----------
+    df       : DataFrame loaded from user-supplied CSV.
+    symbol   : Ticker label for logging context.
+
+    Returns
+    -------
+    DataFrame with sanitized string values.
+    """
+    sanitized_count = 0
+    for col in df.columns:
+        if df[col].dtype == object:
+            before = df[col].astype(str)
+            after = before.apply(_strip_formula_prefix)
+            changed = (before != after)
+            if changed.any():
+                sanitized_count += int(changed.sum())
+                df[col] = after
+
+    if sanitized_count > 0:
+        log.warning(
+            "[%s] CSV sanitized: %d cell(s) had formula-prefix values "
+            "(=, +, -, @). These have been neutralized to prevent "
+            "spreadsheet injection. Verify data integrity manually.",
+            symbol, sanitized_count
+        )
+
+    return df
+
+
+def _strip_formula_prefix(value: str) -> str:
+    """Strip formula injection prefix from a cell value."""
+    s = str(value).strip()
+    if s and s[0] in _FORMULA_PREFIXES:
+        return " " + s
+    return s
 
 
 def load_csv(
@@ -150,7 +260,9 @@ def load_csv(
         )
 
     log.debug("Loading CSV: %s (%s)", filepath, symbol)
-    df = pd.read_csv(filepath)
+    df = pd.read_csv(filepath, engine="python")
+
+    df = _sanitize_dataframe(df, symbol)
     df.columns = [c.lower().strip() for c in df.columns]
 
     # Detect datetime column
@@ -190,11 +302,10 @@ def fetch_intraday_chunked(
     Fetch intraday data over long date ranges by splitting into rolling
     chunks that fit within yfinance's per-request limits.
 
-    Used by the backtester when the requested date range exceeds 60 days.
+    Each chunk is fetched via fetch_intraday() and benefits from the
+    shared Parquet cache, so repeated runs across overlapping windows
+    only hit the API for genuinely new data.
     """
-    import math
-    from datetime import timedelta
-
     interval_norm = interval.strip().lower()
     effective_chunk_days = chunk_days
     if interval_norm == "1m":

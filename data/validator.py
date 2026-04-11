@@ -49,10 +49,12 @@ def validate(df: pd.DataFrame, symbol: str, interval_minutes: int) -> List[str]:
 
     # --- Date range ---
     date_range_days = (df.index[-1] - df.index[0]).days
+    trading_days = df.index.normalize().nunique()
     if date_range_days < 20:
         warnings.append(
-            f"[{symbol}] Only {date_range_days} days of data. "
-            "A minimum of 30 trading days is recommended for meaningful results."
+            f"[{symbol}] Only {date_range_days} calendar days ({trading_days} trading days) of data available "
+            f"for {interval_minutes}m bars — limited by data source. "
+            "A minimum of ~30 trading days is recommended for meaningful results."
         )
 
     # --- Volume ---
@@ -88,6 +90,43 @@ def filter_market_hours(
         (df.index.time <= pd.Timestamp(session_end).time())
     )
     return df[mask]
+
+
+def validate_daily(daily_df: pd.DataFrame, symbol: str) -> List[str]:
+    """
+    Run quality checks on a daily OHLCV DataFrame (used for ATR).
+
+    Returns a (possibly empty) list of warning strings.
+    """
+    warnings: List[str] = []
+
+    if daily_df.empty:
+        warnings.append(f"[{symbol}] Daily data is empty — ATR will be unreliable.")
+        return warnings
+
+    bad_ohlc = (daily_df["high"] < daily_df["low"]) | (daily_df["open"] <= 0) | (daily_df["close"] <= 0)
+    if not bad_ohlc.empty:
+        warnings.append(f"[{symbol}] {len(bad_ohlc)} daily bars with high < low or non-positive prices.")
+
+    date_range_days = (daily_df.index[-1] - daily_df.index[0]).days
+    if date_range_days < 20:
+        trading_days = daily_df.index.nunique()
+        warnings.append(
+            f"[{symbol}] Only {date_range_days} calendar days ({trading_days} trading days) "
+            "of daily data. A minimum of ~30 trading days is recommended for ATR accuracy."
+        )
+
+    zero_vol = (daily_df["volume"] == 0).sum()
+    if zero_vol > len(daily_df) * 0.5:
+        warnings.append(
+            f"[{symbol}] More than 50% of daily bars have zero volume. "
+            "ATR calculations may be affected."
+        )
+
+    if not warnings:
+        log.debug("[%s] Daily data validation passed (%d bars).", symbol, len(daily_df))
+
+    return warnings
 
 
 def get_session_dates(df: pd.DataFrame) -> List[str]:

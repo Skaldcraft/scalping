@@ -3,4 +3,8 @@ pandas>=2.0.0
 numpy>=1.24.0
 plotly>=5.18.0
 streamlit>=1.35.0
-pyyaml>=6.0
+pyyaml>=6.0.1
+
+# Testing
+pytest>=7.0.0
+pytest-cov>=4.0.0

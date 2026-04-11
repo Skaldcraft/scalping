@@ -30,7 +30,7 @@ from data.models import (
     TradeDirection, TradeResult
 )
 from data.fetcher import fetch_daily, fetch_intraday_chunked, load_csv
-from data.validator import get_session_dates, validate
+from data.validator import get_session_dates, validate, validate_daily
 from engine.session import SessionGate
 from engine.opening_range import calculate_opening_range, calculate_atr, is_manipulation_candle
 from engine.indicators import (
@@ -61,6 +61,7 @@ class BacktestResult:
     instrument_results: Dict[str, List[TradeResult]] = field(default_factory=dict)
     session_summaries:  Dict[str, List[SessionSummary]] = field(default_factory=dict)
     validation_warnings: List[str] = field(default_factory=list)
+    diagnostics: Dict[str, dict] = field(default_factory=dict)
 
 
 class Backtester:
@@ -146,7 +147,7 @@ class Backtester:
             log.info("=" * 60)
             try:
                 trades, summaries, warnings = self._run_instrument(
-                    symbol, source_info, start_date, end_date
+                    symbol, source_info, start_date, end_date, result
                 )
                 result.instrument_results[symbol] = trades
                 result.session_summaries[symbol]  = summaries
@@ -240,6 +241,7 @@ class Backtester:
         source_info: dict,
         start_date: date,
         end_date: date,
+        result: BacktestResult,
     ):
         # ------------------------------------------------------------------
         # 1. Load data
@@ -307,11 +309,25 @@ class Backtester:
         for w in warnings:
             log.warning(w)
 
+        daily_warnings = validate_daily(daily_df, symbol)
+        for w in daily_warnings:
+            log.warning(w)
+
         # ------------------------------------------------------------------
         # 3. Iterate sessions
         # ------------------------------------------------------------------
         session_dates = get_session_dates(intraday_df)
-        log.info("[%s] %d trading sessions to process.", symbol, len(session_dates))
+        log.info("[%s] %d bars fetched; %d sessions to process (%s → %s).",
+                 symbol, len(intraday_df), len(session_dates),
+                 str(start_date), str(end_date))
+
+        result.diagnostics[symbol] = {
+            "bars": len(intraday_df),
+            "sessions": len(session_dates),
+            "session_dates": session_dates,
+            "data_start": str(intraday_df.index[0]) if not intraday_df.empty else "N/A",
+            "data_end": str(intraday_df.index[-1]) if not intraday_df.empty else "N/A",
+        }
 
         trades: List[TradeResult]    = []
         summaries: List[SessionSummary] = []

@@ -278,6 +278,13 @@ def build_sidebar(default_cfg: dict) -> tuple[dict, date, date]:
     st.sidebar.caption("All equities in the universe will be analyzed by default. To analyze only specific equities, select them below.")
 
 
+    # Reset marker — must be checked BEFORE the multiselect widget is instantiated,
+    # because Streamlit locks a session_state key the moment a keyed widget renders.
+    _RESET_MARKER = "_reset_equity_selection"
+    if st.session_state.get(_RESET_MARKER):
+        st.session_state["selected_equities"] = []
+        del st.session_state[_RESET_MARKER]
+
     # Multi-select for override, always update session state
     selected_equities = st.sidebar.multiselect(
         "Select equities to analyze (optional)",
@@ -286,10 +293,11 @@ def build_sidebar(default_cfg: dict) -> tuple[dict, date, date]:
         help="Leave empty to analyze all equities. Select one or more to override.",
         key="selected_equities"
     )
-    # Reset button
+    # Reset button — sets a marker that is consumed on the NEXT script run,
+    # before the multiselect is instantiated, avoiding the ownership lock.
     if st.sidebar.button("Reset selection to all", help="Reset to analyze all equities."):
-        st.session_state.selected_equities = []
-        st.experimental_rerun()
+        st.session_state[_RESET_MARKER] = True
+        st.rerun()
 
 
     st.sidebar.subheader("Strategy")
@@ -320,7 +328,7 @@ def build_sidebar(default_cfg: dict) -> tuple[dict, date, date]:
     displacement_min_atr_pct = st.sidebar.slider(
         "Gap Min Size (% of ATR14)",
         min_value=0.0,
-        max_value=15.0,
+        max_value=20.0,
         value=float(_prefs.get("displacement_min_atr_pct", trend_mode_cfg.get("displacement_min_atr_pct", 3.0))),
         step=0.5,
     )
@@ -344,7 +352,7 @@ def build_sidebar(default_cfg: dict) -> tuple[dict, date, date]:
     )
     risk_pct = st.sidebar.slider(
         "Risk Per Trade (%)",
-        min_value=0.25, max_value=3.0,
+        min_value=0.25, max_value=5.0,
         value=float(_prefs.get("risk_pct", default_cfg["account"]["risk_per_trade_pct"])),
         step=0.25,
     )
@@ -404,6 +412,18 @@ def build_sidebar(default_cfg: dict) -> tuple[dict, date, date]:
         "daily_loss_pct": float(daily_loss_pct),
         "commission": float(commission),
     })
+
+    if end_date <= start_date:
+        st.sidebar.error("End date must be after start date.")
+        st.stop()
+    date_range_days = (end_date - start_date).days
+    if date_range_days > 365:
+        st.sidebar.error(
+            f"Date range ({date_range_days} days) exceeds 1 year. "
+            "Reduce the range to ≤ 365 days for reliable results. "
+            "For longer backtests, use the CLI: python main.py --start YYYY-MM-DD --end YYYY-MM-DD"
+        )
+        st.stop()
 
     return cfg, start_date, end_date
 
@@ -930,6 +950,68 @@ def build_weekly_equity_overview(results_dir: Path, symbols: list[str]) -> dict:
     }
 
 
+def _render_weekly_summary(latest_batch, weekly_rows):
+    if latest_batch:
+        review_cfg = load_default_config().get("weekly_review", {}) or {}
+        batch_summary = latest_batch.get("summary", {})
+        weeks = latest_batch.get("weeks", [])
+        recent_weeks = weeks[-3:] if len(weeks) > 3 else weeks
+        summary_df = (
+            pd.DataFrame(recent_weeks)[["week_start", "week_end", "status", "trades", "win_rate_2r", "net_pnl_2r"]]
+            if recent_weeks
+            else pd.DataFrame()
+        )
+        b1, b2, b3 = st.columns(3)
+        b1.metric("Weeks", len(recent_weeks))
+        b2.metric(
+            "Avg Win Rate",
+            f"{batch_summary.get('avg_win_rate_2r', 'N/A')}%"
+            if batch_summary.get("avg_win_rate_2r") is not None
+            else "N/A",
+        )
+        b3.metric("Total P&L", f"${batch_summary.get('total_net_pnl_2r', 0):,.2f}" if batch_summary else "N/A")
+        if not summary_df.empty:
+            st.dataframe(summary_df, width="stretch", hide_index=True)
+        best_week = latest_batch.get("best_week")
+        weakest_week = latest_batch.get("weakest_week")
+        if best_week and weakest_week:
+            st.write(f"Best: {best_week['week_start']} → {best_week['week_end']} (${best_week['net_pnl_2r']:,.2f})")
+            st.write(f"Weakest: {weakest_week['week_start']} → {weakest_week['week_end']} (${weakest_week['net_pnl_2r']:,.2f})")
+        st.caption(f"Status: {classify_long_view_status(recent_weeks, review_cfg)}")
+    elif weekly_rows:
+        derived_rows = []
+        for row in weekly_rows:
+            week_key = str(row.get("week", ""))
+            week_start = ""
+            week_end = ""
+            try:
+                year_str, week_str = week_key.split("-W")
+                week_start_date = datetime.fromisocalendar(int(year_str), int(week_str), 1).date()
+                week_end_date = week_start_date + timedelta(days=4)
+                week_start = week_start_date.isoformat()
+                week_end = week_end_date.isoformat()
+            except Exception:
+                week_start = week_key
+            derived_rows.append({
+                "week_start": week_start,
+                "week_end": week_end,
+                "trades": int(row.get("trades", 0) or 0),
+                "win_rate_2r": float(row.get("avg_win_rate", 0) or 0),
+                "net_pnl_2r": float(row.get("net_pnl", 0) or 0),
+            })
+        recent_weeks = derived_rows[:3]
+        avg_win = mean(x["win_rate_2r"] for x in recent_weeks) if recent_weeks else 0
+        total_pnl = sum(x["net_pnl_2r"] for x in recent_weeks) if recent_weeks else 0
+        b1, b2, b3 = st.columns(3)
+        b1.metric("Weeks", len(recent_weeks))
+        b2.metric("Avg Win Rate", f"{avg_win:.2f}%")
+        b3.metric("Total P&L", f"${total_pnl:,.2f}")
+        st.dataframe(pd.DataFrame(recent_weeks), width="stretch", hide_index=True)
+        st.caption("No batch report available — showing run-based weekly summary.")
+    else:
+        st.caption("No weekly data available yet.")
+
+
 def _sparkline_figure(points: list[dict], title: str):
     fig = go.Figure()
     if points:
@@ -958,12 +1040,13 @@ def _sparkline_figure(points: list[dict], title: str):
     return fig
 
 
-def render_weekly_equity_overview(symbols: list[str], results_dir: Path):
+def render_weekly_equity_overview(symbols: list[str], results_dir: Path, section_title: str | None = None):
     overview = build_weekly_equity_overview(results_dir, symbols)
     overall = overview["overall"]
     by_symbol = overview["by_symbol"]
 
-    st.subheader("Weekly Equity Overview")
+    if section_title:
+        st.subheader(section_title)
     if overall:
         st.plotly_chart(_sparkline_figure(overall, "Portfolio Weekly Net P&L"), width="stretch")
     else:
@@ -990,8 +1073,9 @@ def render_weekly_equity_overview(symbols: list[str], results_dir: Path):
                 st.caption("No data yet")
 
 
-def render_how_it_works():
-    st.title("How it works")
+def render_how_it_works(embedded: bool = False):
+    if not embedded:
+        st.title("How it works")
     st.caption(
         "A beginner-friendly guide to scalping, backtesting, and using PulseTrader with confidence."
     )
@@ -1025,166 +1109,93 @@ def render_how_it_works():
 
 
 def render_home():
-    st.write("")
+    st.subheader("Status Overview")
 
-    st.subheader("Tracked Universe")
     live_symbols = tracked_universe_symbols(load_default_config())
-    grouped_universe = grouped_tracked_universe(load_default_config())
-    if grouped_universe:
-        u1, u2 = st.columns(2)
-        group_items = list(grouped_universe.items())
-        for idx, (group_name, symbols) in enumerate(group_items):
-            with (u1 if idx % 2 == 0 else u2):
-                st.markdown(f"**{_display_asset_class(group_name)}**")
-                st.write(", ".join(symbols))
-
-        total_symbols = sum(len(symbols) for symbols in grouped_universe.values())
-        st.caption(
-            f"PulseTrader tracks {total_symbols} instruments across equities, indices, forex, and gold. "
-            "Normal runs use this fixed universe; only the pre-session selector decides which symbols are traded in the session."
-        )
-    else:
-        st.caption("No tracked universe configured yet.")
-
-    st.caption("Use Research Overrides in the Backtest sidebar only when testing custom subsets.")
-    st.markdown(
-        "<div class='theme-note theme-note--small'>"
-        "Weekly results are directional and informational. They are not final conclusions, but a way to monitor how the strategy is behaving over time."
-        "</div>",
-        unsafe_allow_html=True,
-    )
-
     latest_run = load_latest_run_summary(RESULTS_PATH)
     latest_batch = load_latest_batch_summary(RESULTS_PATH)
     long_view = build_long_view(RESULTS_PATH, limit=8)
     weekly_overview = build_weekly_equity_overview(RESULTS_PATH, live_symbols)
     last_data_date = weekly_overview.get("latest_session_date") or "N/A"
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Saved Weeks", len(long_view.get("recent", [])))
-    c2.metric("Batch Report", "Available" if latest_batch else "None")
-    c3.metric("Last Data Date", last_data_date)
+    top_col1, top_col2, top_col3, top_col4, top_col5 = st.columns(5)
+    top_col1.metric("Saved Weeks", len(long_view.get("recent", [])))
+    top_col2.metric("Batch Report", "Available" if latest_batch else "None")
+    top_col3.metric("Last Data Date", last_data_date)
+    top_col4.metric("Tracked Instruments", len(live_symbols))
+    top_col5.metric(
+        "Auto-refresh",
+        "Active" if st.session_state.get("pref_auto_refresh", False) else "Off",
+    )
 
     if latest_run:
-        st.subheader("Latest Run")
-        r1, r2, r3, r4 = st.columns(4)
-        r1.metric("Trades", latest_run["trades"])
-        r2.metric("Win Rate", f"{latest_run['win_rate_2r']:.1f}%")
-        r3.metric("Profit Factor", f"{latest_run['profit_factor_2r']:.2f}" if latest_run["profit_factor_2r"] else "N/A")
-        r4.metric("Net P&L", f"${latest_run['net_pnl_2r']:,.2f}")
+        st.divider()
+        st.subheader("Latest Backtest Run")
+        lr1, lr2, lr3, lr4, lr5 = st.columns(5)
+        lr1.metric("Trades", latest_run["trades"])
+        lr2.metric("Sessions", latest_run["sessions"])
+        lr3.metric("Win Rate (2R)", f"{latest_run['win_rate_2r']:.1f}%")
+        lr4.metric(
+            "Profit Factor (2R)",
+            f"{latest_run['profit_factor_2r']:.2f}" if latest_run["profit_factor_2r"] else "N/A",
+        )
+        lr5.metric("Net P&L (2R)", f"${latest_run['net_pnl_2r']:,.2f}")
+
         latest_cfg_path = latest_run["run_dir"] / "config_snapshot.yaml"
         if latest_cfg_path.exists():
             latest_cfg = yaml.safe_load(latest_cfg_path.read_text())
             custom_symbols = latest_cfg.get("instruments", {}).get("custom_symbols", [])
-            if custom_symbols:
-                st.caption(f"Custom symbols added to universe: {', '.join(custom_symbols)}")
-
             pre_cfg = latest_cfg.get("pre_session", {}) or {}
             selection_snapshot = load_selection_snapshot(latest_run["run_dir"])
-            if pre_cfg.get("enabled", False):
-                st.markdown("**Pre-Session Selection**")
-                ps1, ps2, ps3, ps4 = st.columns(4)
-                selected_symbols = (selection_snapshot or {}).get("selected_symbols", [])
-                evaluated = (selection_snapshot or {}).get("evaluated", [])
-                excluded_count = max(0, len(evaluated) - len(selected_symbols))
-                ps1.metric("Selector", "Enabled")
-                ps2.metric("Top-N", int(pre_cfg.get("top_n", 3)))
-                ps3.metric("Selected", len(selected_symbols))
-                ps4.metric("Excluded", excluded_count)
 
-                if selected_symbols:
-                    st.caption(f"Session symbols: {', '.join(selected_symbols)}")
+            detail_cols = st.columns([1, 1, 1])
+            with detail_cols[0]:
+                if custom_symbols:
+                    st.caption(f"Custom symbols: {', '.join(custom_symbols)}")
                 else:
-                    st.caption("No selection snapshot found for this run.")
-
-                rules = (selection_snapshot or {}).get("rules", {})
-                if rules:
+                    st.caption("Standard universe (no custom symbols)")
+            with detail_cols[1]:
+                if pre_cfg.get("enabled", False):
+                    selected_symbols = (selection_snapshot or {}).get("selected_symbols", [])
+                    evaluated = (selection_snapshot or {}).get("evaluated", [])
+                    excluded_count = max(0, len(evaluated) - len(selected_symbols))
                     st.caption(
-                        "Policies: "
-                        f"PF missing={rules.get('pf_missing_policy', 'allow')}, "
-                        f"Spread missing={rules.get('spread_missing_policy', 'allow')}"
+                        f"Pre-session: {len(selected_symbols)} selected, "
+                        f"{excluded_count} excluded (Top-{int(pre_cfg.get('top_n', 3))})"
                     )
+            with detail_cols[2]:
+                st.caption(f"Run folder: `{latest_run['run_dir'].name}`")
 
-    weekly_rows = long_view.get("recent", [])
-    charts_tab, history_tab, summary_tab = st.tabs(["Weekly Charts", "Weekly History", "Weekly Summary"])
+    st.divider()
+    st.subheader("Weekly Portfolio Performance")
+    charts_tab, history_tab, summary_tab = st.tabs(["Charts", "History", "Summary"])
 
     with charts_tab:
-        render_weekly_equity_overview(live_symbols, RESULTS_PATH)
+        render_weekly_equity_overview(live_symbols, RESULTS_PATH, section_title="Portfolio & Per-Symbol Performance")
 
     with history_tab:
+        weekly_rows = long_view.get("recent", [])
         if weekly_rows:
             st.dataframe(pd.DataFrame(weekly_rows), width="stretch", hide_index=True)
         else:
             st.caption("No weekly history found yet.")
 
     with summary_tab:
-        if latest_batch:
-            review_cfg = load_default_config().get("weekly_review", {}) or {}
-            batch_summary = latest_batch.get("summary", {})
-            weeks = latest_batch.get("weeks", [])
-            recent_weeks = weeks[-3:] if len(weeks) > 3 else weeks
-            summary_df = pd.DataFrame(recent_weeks)[["week_start", "week_end", "status", "trades", "win_rate_2r", "net_pnl_2r"]] if recent_weeks else pd.DataFrame()
-            b1, b2, b3 = st.columns(3)
-            b1.metric("Weeks", len(recent_weeks))
-            b2.metric("Avg Win Rate", f"{batch_summary.get('avg_win_rate_2r', 'N/A')}%" if batch_summary.get("avg_win_rate_2r") is not None else "N/A")
-            b3.metric("Total P&L", f"${batch_summary.get('total_net_pnl_2r', 0):,.2f}" if batch_summary else "N/A")
-            if not summary_df.empty:
-                st.dataframe(summary_df, width="stretch", hide_index=True)
-
-            best_week = latest_batch.get("best_week")
-            weakest_week = latest_batch.get("weakest_week")
-            if best_week and weakest_week:
-                st.write(
-                    f"Best week: {best_week['week_start']} to {best_week['week_end']} (${best_week['net_pnl_2r']:,.2f})"
-                )
-                st.write(
-                    f"Weakest week: {weakest_week['week_start']} to {weakest_week['week_end']} (${weakest_week['net_pnl_2r']:,.2f})"
-                )
-            st.caption(f"Recent view status: {classify_long_view_status(recent_weeks, review_cfg)}")
-        elif weekly_rows:
-            derived_rows = []
-            for row in weekly_rows:
-                week_key = str(row.get("week", ""))
-                week_start = ""
-                week_end = ""
-                try:
-                    year_str, week_str = week_key.split("-W")
-                    week_start_date = datetime.fromisocalendar(int(year_str), int(week_str), 1).date()
-                    week_end_date = week_start_date + timedelta(days=4)
-                    week_start = week_start_date.isoformat()
-                    week_end = week_end_date.isoformat()
-                except Exception:
-                    week_start = week_key
-
-                derived_rows.append(
-                    {
-                        "week_start": week_start,
-                        "week_end": week_end,
-                        "trades": int(row.get("trades", 0) or 0),
-                        "win_rate_2r": float(row.get("avg_win_rate", 0) or 0),
-                        "net_pnl_2r": float(row.get("net_pnl", 0) or 0),
-                    }
-                )
-
-            recent_weeks = derived_rows[:3]
-            avg_win = mean(x["win_rate_2r"] for x in recent_weeks) if recent_weeks else 0
-            total_pnl = sum(x["net_pnl_2r"] for x in recent_weeks) if recent_weeks else 0
-            b1, b2, b3 = st.columns(3)
-            b1.metric("Weeks", len(recent_weeks))
-            b2.metric("Avg Win Rate", f"{avg_win:.2f}%")
-            b3.metric("Total P&L", f"${total_pnl:,.2f}")
-            st.dataframe(pd.DataFrame(recent_weeks), width="stretch", hide_index=True)
-            st.caption("Showing run-based weekly summary because no active weekly batch report is available.")
-        else:
-            st.caption("No weekly batch report found yet.")
+        _render_weekly_summary(latest_batch, long_view.get("recent", []))
 
     st.divider()
-    st.write("Use the tabs above to move between `PulseTrader`, `Results Manager`, `Backtest`, and `How it works`.")
+
+    with st.expander("Results Manager — browse and clean saved runs"):
+        render_results_manager(embedded=True)
+
+    with st.expander("How it works — beginner guide"):
+        render_how_it_works(embedded=True)
 
 
-def render_results_manager():
-    st.title("Results Manager")
-    st.caption("Browse and clean saved runs from the interface.")
+def render_results_manager(embedded: bool = False):
+    if not embedded:
+        st.title("Results Manager")
+        st.caption("Browse and clean saved runs from the interface.")
 
     # Deferred feedback from post-rerun messages
     for _key, _fn in [("rm_msg_success", st.success), ("rm_msg_warning", st.warning)]:
@@ -1897,15 +1908,41 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
         _render_operator_card(briefing)
 
         reason_counts = {}
+        total_sessions = 0
         for summaries in result.session_summaries.values():
             for summary in summaries:
+                total_sessions += 1
                 for reason in summary.rejection_reasons:
                     reason_counts[reason] = reason_counts.get(reason, 0) + 1
 
-        st.warning(
-            "The backtest completed but produced no trades.  "
-            "Check date range, pre-session selection, filters, and data availability. "
-            "Validation warnings (if any) are shown below."
+        diagnostics_lines = []
+        for sym, diag in getattr(result, "diagnostics", {}).items():
+            diag_sessions = diag.get("sessions", 0)
+            diag_bars = diag.get("bars", 0)
+            data_start = diag.get("data_start", "N/A")
+            data_end = diag.get("data_end", "N/A")
+            if diag_sessions == 0:
+                diagnostics_lines.append(
+                    f"- **{sym}**: no sessions found ({diag_bars} bars, data range: {data_start[:10] if data_start != 'N/A' else 'N/A'} → {data_end[:10] if data_end != 'N/A' else 'N/A'})"
+                )
+            else:
+                diagnostics_lines.append(
+                    f"- **{sym}**: {diag_sessions} session(s), {diag_bars} bars"
+                )
+
+        st.warning("The backtest completed but produced no trades.")
+
+        if diagnostics_lines:
+            with st.expander("Session diagnostics — what was actually found per symbol"):
+                st.caption("Shows what the backtester found for each instrument. "
+                           "'No sessions found' means Yahoo Finance returned no data for the selected date range.")
+                for line in diagnostics_lines:
+                    st.write(line)
+
+        st.caption(
+            "No sessions were processed." if total_sessions == 0
+            else f"{total_sessions} session(s) were processed but no entries qualified. "
+                 "Check filters, ATR/displacement thresholds, and market conditions for the selected dates."
         )
 
         if reason_counts:
@@ -2248,41 +2285,15 @@ def main():
         enable_dashboard_auto_refresh(15)
     st.sidebar.caption("Use `Run Backtest` below if you want an immediate update right now.")
 
-    page_labels = {
-        "pulse": "🏠 PulseTrader",
-        "results": "🗂️ Results Manager",
-        "backtest": "📊 Backtest",
-        "guide": "📘 How it works",
-    }
-    page_keys = list(page_labels.keys())
-    query_page = st.query_params.get("page", "pulse")
-    if isinstance(query_page, list):
-        query_page = query_page[0]
-    if query_page not in page_labels:
-        query_page = "pulse"
+    tab_home, tab_backtest = st.tabs([
+        "🏠 Home",
+        "📊 Backtest",
+    ])
 
-    selected_label = st.radio(
-        "Page",
-        options=[page_labels[k] for k in page_keys],
-        index=page_keys.index(query_page),
-        horizontal=True,
-        label_visibility="collapsed",
-    )
-    selected_page = next(k for k, v in page_labels.items() if v == selected_label)
-    if st.query_params.get("page") != selected_page:
-        st.query_params["page"] = selected_page
-
-    if selected_page == "pulse":
+    with tab_home:
         render_home()
 
-    elif selected_page == "backtest":
-        st.title("PulseTrader Backtester")
-        st.caption(
-            "A selection-driven opening-range strategy with pre-session Top-N ranking, "
-            "retest/gap trend entries, and automated risk management."
-        )
-        st.caption("Weekly results are monitoring signals, not final conclusions.")
-
+    with tab_backtest:
         default_cfg = load_default_config()
         cfg, start_date, end_date = build_sidebar(default_cfg)
 
@@ -2349,16 +2360,7 @@ def main():
 
         last_run = st.session_state.get("last_run")
         if not last_run:
-            st.markdown(
-                """
-                <div class="soft-panel">
-                    <strong>Start here.</strong> Configure your parameters in the sidebar and press <strong>Run Backtest</strong> to begin.<br><br>
-                    <strong>Selection model:</strong> The tracked universe defines the full instrument pool. If pre-session selection is enabled, only the session Top-N selection is traded for that run.<br><br>
-                    <strong>Data sources:</strong> Equities are fetched automatically from Yahoo Finance. For Forex instruments, place OHLCV CSV files in <code>data_files/</code> and add them to <code>config/settings.yaml</code>.
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+            st.info("Configure parameters in the sidebar and press **Run Backtest** to begin.")
         else:
             render_results(
                 last_run["cfg"],
@@ -2367,12 +2369,6 @@ def main():
                 last_run["report_path"],
                 last_run["exec_log_path"],
             )
-
-    elif selected_page == "results":
-        render_results_manager()
-
-    else:
-        render_how_it_works()
 
 
 if __name__ == "__main__":
