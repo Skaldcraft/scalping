@@ -138,68 +138,24 @@ st.markdown(
         color: inherit !important;
         opacity: 1;
       }
-            body a,
-            section a,
-            [data-testid="stAppViewContainer"] a,
-            [data-testid="stMainBlockContainer"] a,
-            section[data-testid="stMainBlockContainer"] a,
-            .stMarkdown a,
-            .stAlert a,
-            .st-info a,
-            p a,
-            span a,
-            div a {
-                color: inherit !important;
-                text-decoration: underline;
-            }
-            body a:visited,
-            section a:visited,
-            [data-testid="stAppViewContainer"] a:visited,
-            [data-testid="stMainBlockContainer"] a:visited,
-            section[data-testid="stMainBlockContainer"] a:visited,
-            .stMarkdown a:visited,
-            .stAlert a:visited,
-            .st-info a:visited,
-            p a:visited,
-            span a:visited,
-            div a:visited {
-                color: inherit !important;
-            }
-            body a:hover,
-            section a:hover,
-            [data-testid="stAppViewContainer"] a:hover,
-            [data-testid="stMainBlockContainer"] a:hover,
-            section[data-testid="stMainBlockContainer"] a:hover,
-            .stMarkdown a:hover,
-            .stAlert a:hover,
-            .st-info a:hover,
-            p a:hover,
-            span a:hover,
-            div a:hover {
-                color: inherit !important;
-                opacity: 0.75;
-            }
             section[data-testid="stSidebar"] a,
             [data-testid="stMarkdownContainer"] a,
             .stMarkdown a,
             .stCaption a {
-                color: inherit !important;
-                text-decoration: underline;
+                color: #b6862c !important;
             }
             section[data-testid="stSidebar"] a:visited,
             [data-testid="stMarkdownContainer"] a:visited,
             .stMarkdown a:visited,
             .stCaption a:visited {
-                color: inherit !important;
+                color: #b6862c !important;
             }
             section[data-testid="stSidebar"] a:hover,
             [data-testid="stMarkdownContainer"] a:hover,
             .stMarkdown a:hover,
             .stCaption a:hover {
-                color: inherit !important;
-                opacity: 0.75;
+                color: #d6a84f !important;
             }
-
             section[data-testid="stSidebar"] [data-baseweb="select"] *:focus,
             section[data-testid="stSidebar"] input:focus,
             section[data-testid="stSidebar"] textarea:focus,
@@ -1846,41 +1802,6 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
         )
         st.info(reasoning.get(chosen, "No reasoning available for this symbol in this run."))
 
-    def _render_strategic_briefing_section(briefing_payload, *, key_suffix: str):
-        st.subheader("Strategic Briefing")
-        col1, col2 = st.columns([1, 5])
-        with col1:
-            _render_briefing_download(briefing_payload, key_suffix=key_suffix)
-        with col2:
-            st.caption(
-                "Generated automatically from gate decisions, entry modes, and win-rate distribution."
-            )
-        st.divider()
-        col_pulse, col_focus = st.columns([3, 2])
-        with col_pulse:
-            st.markdown("**The Strategy's Pulse**")
-            st.info(briefing_payload.get("strategy_pulse", "No pulse available."))
-        with col_focus:
-            st.markdown("**Strategic Focus**")
-            for line in briefing_payload.get("strategic_focus", []) or []:
-                st.write(f"- {line}")
-        st.divider()
-        sys_col1, sys_col2 = st.columns(2)
-        with sys_col1:
-            st.markdown("**System Standards**")
-            for line in briefing_payload.get("system_standards", []) or []:
-                st.write(f"- {line}")
-        with sys_col2:
-            st.markdown("**Settings Calibration**")
-            for line in briefing_payload.get("settings_calibration", []) or []:
-                st.write(f"- {line}")
-        _render_symbol_reasoning(briefing_payload, key_suffix=key_suffix)
-        equity_actions = briefing_payload.get("equity_actions") or []
-        if equity_actions:
-            st.markdown("**Equities Requiring Action**")
-            for line in equity_actions:
-                st.write(f"- {line}")
-
     def _build_briefing_document(briefing_payload) -> str:
         lines = [
             "Strategic Briefing",
@@ -1928,7 +1849,7 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
             key=f"download_strategic_briefing_{key_suffix}",
         )
 
-    def _render_execution_diagnostics_content(exec_path: Path):
+    def _render_execution_diagnostics(exec_path: Path):
         if not exec_path or not exec_path.exists():
             return
 
@@ -1938,58 +1859,43 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
             st.warning("Execution diagnostics could not be loaded.")
             return
 
+        st.subheader("Execution Diagnostics")
+
         gate_counts = ((payload.get("aggregate") or {}).get("gate_status_counts") or {})
         if gate_counts:
             gate_rows = []
             for gate_name, counts in gate_counts.items():
                 gate_rows.append({
-                    "Gate": gate_name.replace("_", " ").title(),
+                    "Gate": gate_name,
                     "Passed": int(counts.get("passed", 0)),
                     "Failed": int(counts.get("failed", 0)),
                     "Skipped": int(counts.get("skipped", 0)),
+                    "Unknown": int(counts.get("unknown", 0)),
                 })
-            st.dataframe(
-                pd.DataFrame(gate_rows),
-                width="stretch",
-                hide_index=True,
-                column_config={
-                    "Gate": st.column_config.TextColumn("Gate", width="medium"),
-                    "Passed": st.column_config.NumberColumn("Passed", format="%d", width="small"),
-                    "Failed": st.column_config.NumberColumn("Failed", format="%d", width="small"),
-                    "Skipped": st.column_config.NumberColumn("Skipped", format="%d", width="small"),
-                },
-            )
+            st.caption("Gate pass/fail summary")
+            st.dataframe(pd.DataFrame(gate_rows), width="stretch", hide_index=True)
 
         sessions = payload.get("sessions", []) or []
         if sessions:
             session_rows = []
             for s in sessions:
                 row = {
-                    "Date": s.get("session_date", ""),
-                    "Symbol": s.get("instrument", ""),
+                    "Date": s.get("session_date"),
+                    "Instrument": s.get("instrument"),
                     "Mode": ((s.get("phase_1") or {}).get("mode_activated") or "").replace("_", " ").title(),
-                    "Trade": "Yes" if s.get("trade_executed") else "No",
-                    "Rejection": "; ".join(s.get("rejection_reasons", []) or []) or "—",
+                    "Trigger": (s.get("phase_1") or {}).get("trigger_candle") or "—",
+                    "Trade Executed": bool(s.get("trade_executed", False)),
+                    "Rejection Reasons": "; ".join(s.get("rejection_reasons", []) or []),
                 }
 
                 for gate in s.get("decision_trace", []) or []:
                     gate_name = str(gate.get("gate", "")).replace("_", " ").title()
-                    row[f"G: {gate_name}"] = gate.get("status", "")
+                    row[f"Gate: {gate_name}"] = gate.get("status", "")
 
                 session_rows.append(row)
 
-            st.dataframe(
-                pd.DataFrame(session_rows),
-                width="stretch",
-                height=280,
-                hide_index=True,
-            )
-
-    def _render_execution_diagnostics(exec_path: Path):
-        if not exec_path or not exec_path.exists():
-            return
-        st.subheader("Execution Diagnostics")
-        _render_execution_diagnostics_content(exec_path)
+            st.caption("Session-level decision trace")
+            st.dataframe(pd.DataFrame(session_rows), width="stretch", height=320)
 
     all_trades = [
         t for trades in result.instrument_results.values() for t in trades
@@ -2041,26 +1947,42 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
 
         if reason_counts:
             sorted_reasons = sorted(reason_counts.items(), key=lambda item: item[1], reverse=True)
-            with st.expander("Rejection reason breakdown"):
-                for reason, count in sorted_reasons[:5]:
-                    st.write(f"- **{reason}**: {count} occurrence(s)")
+            st.caption("Most common no-trade reasons in this run:")
+            for reason, count in sorted_reasons[:5]:
+                st.write(f"- {reason}: {count}")
 
         for w in result.validation_warnings:
             st.warning(w)
 
-        _render_strategic_briefing_section(briefing, key_suffix="no_trade")
+        st.subheader("Strategic Briefing")
+        _render_briefing_download(briefing, key_suffix="no_trade")
+        st.markdown(f"**The Strategy's Pulse**\n\n{briefing['strategy_pulse']}")
+        st.markdown("**Strategic Focus**")
+        for line in briefing["strategic_focus"]:
+            st.write(f"- {line}")
+        st.markdown("**System Standards (Auto-Enforced)**")
+        for line in briefing["system_standards"]:
+            st.write(f"- {line}")
+        st.markdown("**Dashboard Calibration Recommendations**")
+        for line in briefing["settings_calibration"]:
+            st.write(f"- {line}")
+        _render_symbol_reasoning(briefing, key_suffix="no_trade")
+        if briefing.get("equity_actions"):
+            st.markdown("**Equities Requiring Action**")
+            for line in briefing["equity_actions"]:
+                st.write(f"- {line}")
+
+        _render_execution_diagnostics(exec_log_path)
 
         diagnostics_csv = recorder.directory / "execution_diagnostics.csv"
-        with st.expander("Execution Diagnostics"):
-            _render_execution_diagnostics_content(exec_log_path)
-            if diagnostics_csv.exists():
-                st.download_button(
-                    "Execution Diagnostics (CSV)",
-                    data=diagnostics_csv.read_bytes(),
-                    file_name="execution_diagnostics.csv",
-                    mime="text/csv",
-                    key="download_exec_diagnostics_no_trade",
-                )
+        if diagnostics_csv.exists():
+            st.download_button(
+                "Execution Diagnostics (CSV)",
+                data=diagnostics_csv.read_bytes(),
+                file_name="execution_diagnostics.csv",
+                mime="text/csv",
+                key="download_exec_diagnostics_no_trade",
+            )
         return
 
     comparison = compare_targets(all_trades, cfg["account"]["starting_capital"])
@@ -2077,37 +1999,11 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
 
     st.subheader("Performance Summary")
 
-    pf2 = metrics_2r.get("profit_factor")
-    pf3 = metrics_3r.get("profit_factor")
-    sr2 = metrics_2r.get("sharpe_ratio")
-    sr3 = metrics_3r.get("sharpe_ratio")
-
-    p1, p2, p3, p4, p5 = st.columns(5)
-    p1.metric("Trades", metrics_2r.get("total_trades", 0))
-    p2.metric(
-        "Win Rate",
-        f"{metrics_2r.get('win_rate', 0)*100:.1f}%",
-        delta=f"3R: {metrics_3r.get('win_rate', 0)*100:.1f}%",
-    )
-    p3.metric(
-        "Net P&L",
-        f"${metrics_2r.get('net_pnl', 0):,.2f}",
-        delta=f"3R: ${metrics_3r.get('net_pnl', 0):,.2f}",
-    )
-    p4.metric(
-        "Profit Factor",
-        f"{pf2:.3f}" if pf2 else "N/A",
-    )
-    p5.metric(
-        "Max Drawdown",
-        f"{metrics_2r.get('max_drawdown_pct', 0)*100:.1f}%",
-    )
-
-    d1, d2, d3, d4 = st.columns(4)
-    d1.metric("PF (2R)", f"{pf2:.3f}" if pf2 else "N/A")
-    d2.metric("PF (3R)", f"{pf3:.3f}" if pf3 else "N/A")
-    d3.metric("Sharpe (2R)", f"{sr2:.2f}" if sr2 else "N/A")
-    d4.metric("Sharpe (3R)", f"{sr3:.2f}" if sr3 else "N/A")
+    tab_2r, tab_3r = st.tabs(["2:1 Reward Target", "3:1 Reward Target"])
+    with tab_2r:
+        metric_row("2:1", metrics_2r)
+    with tab_3r:
+        metric_row("3:1", metrics_3r)
 
     st.plotly_chart(
         equity_curve_chart(metrics_2r, metrics_3r, cfg["account"]["starting_capital"]),
@@ -2117,6 +2013,29 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
     mode_fig = mode_bar_chart(metrics_2r)
     if mode_fig:
         st.plotly_chart(mode_fig, width="stretch")
+
+    st.subheader("2R vs 3R Comparison")
+    compare_data = {
+        "Metric":         ["Trades", "Win Rate", "Profit Factor", "Net P&L",
+                           "Max Drawdown", "Sharpe Ratio"],
+        "2:1 Target":     [
+            metrics_2r["total_trades"],
+            f"{metrics_2r['win_rate']*100:.1f}%",
+            f"{metrics_2r['profit_factor']:.3f}" if metrics_2r["profit_factor"] else "N/A",
+            f"${metrics_2r['net_pnl']:,.2f}",
+            f"{metrics_2r['max_drawdown_pct']*100:.1f}%",
+            f"{metrics_2r['sharpe_ratio']:.2f}" if metrics_2r["sharpe_ratio"] else "N/A",
+        ],
+        "3:1 Target":     [
+            metrics_3r["total_trades"],
+            f"{metrics_3r['win_rate']*100:.1f}%",
+            f"{metrics_3r['profit_factor']:.3f}" if metrics_3r["profit_factor"] else "N/A",
+            f"${metrics_3r['net_pnl']:,.2f}",
+            f"{metrics_3r['max_drawdown_pct']*100:.1f}%",
+            f"{metrics_3r['sharpe_ratio']:.2f}" if metrics_3r["sharpe_ratio"] else "N/A",
+        ],
+    }
+    st.table(pd.DataFrame(compare_data))
 
     st.subheader("Per-Instrument Breakdown (2R)")
     inst_data = metrics_2r.get("by_instrument", {})
@@ -2129,18 +2048,98 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
                 "Win Rate":   f"{v['win_rate']*100:.1f}%",
                 "Net P&L":    f"${v['net_pnl']:,.2f}",
             })
-        inst_df = pd.DataFrame(inst_rows)
-        st.dataframe(
-            inst_df,
-            column_config={
-                "Instrument": st.column_config.TextColumn("Instrument", width="small"),
-                "Trades":      st.column_config.NumberColumn("Trades", width="small"),
-                "Win Rate":    st.column_config.TextColumn("Win Rate", width="small"),
-                "Net P&L":     st.column_config.TextColumn("Net P&L", width="small"),
-            },
-            hide_index=True,
-            width="stretch",
+        st.table(pd.DataFrame(inst_rows))
+
+    st.subheader("Weekly Review")
+    weekly_status, weekly_takeaway, weekly_watch = build_weekly_review(metrics_2r, cfg)
+    weekly_sessions = sum(len(v) for v in result.session_summaries.values())
+    weekly_trades = metrics_2r.get("total_trades", 0)
+    weekly_win_rate = metrics_2r.get("win_rate", 0) * 100
+    weekly_pf = metrics_2r.get("profit_factor")
+
+    w1, w2, w3, w4 = st.columns(4)
+    w1.metric("Sessions", weekly_sessions)
+    w2.metric("Trades", weekly_trades)
+    w3.metric("Win Rate", f"{weekly_win_rate:.1f}%")
+    w4.metric("Profit Factor", f"{weekly_pf:.3f}" if weekly_pf else "N/A")
+
+    status_color = {
+        "Good": "success",
+        "Mixed": "warning",
+        "Weak": "error",
+        "Too little data": "info",
+    }.get(weekly_status, "info")
+    if status_color == "success":
+        st.success(f"Status: {weekly_status}")
+    elif status_color == "warning":
+        st.warning(f"Status: {weekly_status}")
+    elif status_color == "error":
+        st.error(f"Status: {weekly_status}")
+    else:
+        st.warning(f"Status: {weekly_status}")
+
+    pf_text = f"{metrics_2r['profit_factor']:.3f}" if metrics_2r.get("profit_factor") else "N/A"
+    weekly_lines = build_shared_review_language(
+        title="This week",
+        status=weekly_status,
+        highlight=(
+            f"The utility reviewed {metrics_2r.get('total_trades', 0)} trades. "
+            f"Win rate was {metrics_2r.get('win_rate', 0)*100:.1f}%, profit factor was {pf_text}."
+        ),
+        comparison_text=weekly_takeaway[0] if weekly_takeaway else None,
+        watch_items=weekly_watch,
+    )
+    for line in weekly_lines:
+        st.write(line)
+
+    st.subheader("Recent Runs")
+    long_view_cfg = cfg.get("long_view", {}) or {}
+    if long_view_cfg.get("enabled", True):
+        long_view = build_long_view(
+            RESULTS_PATH,
+            limit=int(long_view_cfg.get("recent_weeks_to_show", 8)),
         )
+        recent_weeks = long_view.get("recent", [])
+        trend = long_view.get("trend", {})
+
+        if recent_weeks:
+            lr1, lr2, lr3, lr4 = st.columns(4)
+            lr1.metric("Current Week Win Rate", f"{trend.get('current_win_rate', 0):.1f}%" if trend else "N/A")
+            lr2.metric("Current Week PF", f"{trend.get('current_profit_factor', 0):.2f}" if trend else "N/A")
+            lr3.metric("Current Week P&L", f"${trend.get('current_net_pnl', 0):,.2f}" if trend else "N/A")
+            lr4.metric("Best Week", trend.get("best_week", "N/A"))
+
+            if trend.get("vs_previous_week"):
+                delta = trend["vs_previous_week"]
+                st.caption(
+                    f"Compared with the previous week: win rate {delta['win_rate_change']:+.2f} points, "
+                    f"profit factor {delta['profit_factor_change']:+.2f}, net P&L {delta['net_pnl_change']:+.2f}."
+                )
+
+            long_lines = build_shared_review_language(
+                title="Across recent weeks",
+                status=weekly_status,
+                highlight=(
+                    f"The latest weekly window shows {trend.get('current_win_rate', 0):.1f}% win rate, "
+                    f"profit factor {trend.get('current_profit_factor', 0):.2f}, and P&L ${trend.get('current_net_pnl', 0):,.2f}."
+                ),
+                comparison_text=(
+                    f"The strongest week in this sample is {trend.get('best_week', 'N/A')}; "
+                    f"the weakest is {trend.get('weakest_week', 'N/A')}."
+                ),
+                watch_items=[
+                    "Watch whether the latest week stays above the mixed threshold.",
+                    "Watch whether the week-over-week trend remains stable.",
+                ],
+            )
+            for line in long_lines:
+                st.write(line)
+
+            st.dataframe(pd.DataFrame(recent_weeks), width="stretch", hide_index=True)
+        else:
+            st.caption("No saved weekly history found yet for the long-view summary.")
+    else:
+        st.caption("Long-view review is disabled in config.")
 
     st.subheader("Trade Journal")
     trade_df = build_trade_df(all_trades)
@@ -2161,36 +2160,28 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
         if sel_inst != "All":
             filtered = filtered[filtered["Instrument"] == sel_inst]
 
-        st.dataframe(
-            filtered,
-            column_config={
-                "ID":           st.column_config.TextColumn("ID", width="small"),
-                "Date":         st.column_config.TextColumn("Date", width="small"),
-                "Instrument":   st.column_config.TextColumn("Instrument", width="small"),
-                "Mode":         st.column_config.TextColumn("Mode", width="small"),
-                "Direction":    st.column_config.TextColumn("Direction", width="small"),
-                "Entry":        st.column_config.NumberColumn("Entry", format="%.2f", width="small"),
-                "SL":           st.column_config.NumberColumn("SL", format="%.2f", width="small"),
-                "TP 2R":        st.column_config.NumberColumn("TP 2R", format="%.2f", width="small"),
-                "TP 3R":        st.column_config.NumberColumn("TP 3R", format="%.2f", width="small"),
-                "Outcome 2R":   st.column_config.TextColumn("Outcome 2R", width="small"),
-                "P&L 2R":       st.column_config.NumberColumn("P&L 2R", format="%.2f", width="small"),
-                "Outcome 3R":   st.column_config.TextColumn("Outcome 3R", width="small"),
-                "P&L 3R":       st.column_config.NumberColumn("P&L 3R", format="%.2f", width="small"),
-                "Exit Reason":  st.column_config.TextColumn("Exit Reason", width="medium"),
-                "Pattern":      st.column_config.TextColumn("Pattern", width="medium"),
-                "Manipulation": st.column_config.TextColumn("Manip", width="small"),
-                "Base Hit":     st.column_config.TextColumn("Base Hit", width="small"),
-            },
-            hide_index=True,
-            width="stretch",
-            height=400,
-        )
+        st.dataframe(filtered, width="stretch", height=400)
 
-    _render_strategic_briefing_section(briefing, key_suffix="with_trades")
+    st.subheader("Strategic Briefing")
+    _render_briefing_download(briefing, key_suffix="with_trades")
+    st.markdown(f"**The Strategy's Pulse**\n\n{briefing['strategy_pulse']}")
+    st.markdown("**Strategic Focus**")
+    for line in briefing["strategic_focus"]:
+        st.write(f"- {line}")
+    st.markdown("**System Standards (Auto-Enforced)**")
+    for line in briefing["system_standards"]:
+        st.write(f"- {line}")
+    st.markdown("**Dashboard Calibration Recommendations**")
+    for line in briefing["settings_calibration"]:
+        st.write(f"- {line}")
+    _render_symbol_reasoning(briefing, key_suffix="with_trades")
+    if briefing.get("equity_actions"):
+        st.markdown("**Equities Requiring Action**")
+        for line in briefing["equity_actions"]:
+            st.write(f"- {line}")
 
-    st.subheader("Downloads & Diagnostics")
-    dl1, dl2, dl3 = st.columns(3)
+    st.subheader("Download Results")
+    dl1, dl2, dl3, dl4 = st.columns(4)
     trade_log_path = recorder.directory / "trade_log.csv"
     if trade_log_path.exists():
         dl1.download_button(
@@ -2219,13 +2210,26 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
             key="download_exec_log",
         )
 
+    diagnostics_csv = recorder.directory / "execution_diagnostics.csv"
+    if diagnostics_csv.exists():
+        dl4.download_button(
+            "Execution Diagnostics (CSV)",
+            data=diagnostics_csv.read_bytes(),
+            file_name="execution_diagnostics.csv",
+            mime="text/csv",
+            key="download_exec_diagnostics",
+        )
+
+    _render_execution_diagnostics(exec_log_path)
+
     selection_json = recorder.directory / "selection_snapshot.json"
     selection_csv = recorder.directory / "selection_snapshot.csv"
     selection_report = recorder.directory / "selection_report.txt"
     if selection_json.exists() or selection_csv.exists() or selection_report.exists():
-        sel1, sel2, sel3 = st.columns(3)
+        st.subheader("Pre-Session Artifacts")
+        s1, s2, s3 = st.columns(3)
         if selection_json.exists():
-            sel1.download_button(
+            s1.download_button(
                 "Selection Snapshot (JSON)",
                 data=selection_json.read_bytes(),
                 file_name="selection_snapshot.json",
@@ -2233,7 +2237,7 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
                 key="download_selection_json",
             )
         if selection_csv.exists():
-            sel2.download_button(
+            s2.download_button(
                 "Selection Snapshot (CSV)",
                 data=selection_csv.read_bytes(),
                 file_name="selection_snapshot.csv",
@@ -2241,16 +2245,13 @@ def render_results(cfg: dict, result, recorder: JournalRecorder, report_path, ex
                 key="download_selection_csv",
             )
         if selection_report.exists():
-            sel3.download_button(
+            s3.download_button(
                 "Selection Report (TXT)",
                 data=selection_report.read_bytes(),
                 file_name="selection_report.txt",
                 mime="text/plain",
                 key="download_selection_report",
             )
-
-    with st.expander("Execution Diagnostics"):
-        _render_execution_diagnostics_content(exec_log_path)
 
     st.caption(f"Results saved to: `{recorder.directory}`")
 
@@ -2284,27 +2285,10 @@ def main():
         enable_dashboard_auto_refresh(15)
     st.sidebar.caption("Use `Run Backtest` below if you want an immediate update right now.")
 
-    query_tab = st.query_params.get("tab", "home")
-    if isinstance(query_tab, list):
-        query_tab = query_tab[0]
-
     tab_home, tab_backtest = st.tabs([
         "🏠 Home",
         "📊 Backtest",
     ])
-
-    if query_tab == "backtest":
-        components.html(
-            """
-            <script>
-            window.addEventListener("load", function() {
-                var tabs = window.parent.document.querySelectorAll("[data-baseweb='tab'] button");
-                if (tabs.length >= 2) { tabs[1].click(); }
-            });
-            </script>
-            """,
-            height=0,
-        )
 
     with tab_home:
         render_home()
